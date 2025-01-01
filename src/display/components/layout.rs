@@ -1,16 +1,15 @@
-use ::tui::backend::Backend;
-use ::tui::layout::{Constraint, Direction, Rect};
-use ::tui::terminal::Frame;
+use ratatui::{
+    layout::{Constraint, Direction, Rect},
+    Frame,
+};
 
-use super::HeaderDetails;
-use super::HelpText;
-use super::Table;
+use crate::display::{HeaderDetails, HelpText, Table};
 
 const FIRST_HEIGHT_BREAKPOINT: u16 = 30;
 const FIRST_WIDTH_BREAKPOINT: u16 = 120;
 
 fn top_app_and_bottom_split(rect: Rect) -> (Rect, Rect, Rect) {
-    let parts = ::tui::layout::Layout::default()
+    let parts = ratatui::layout::Layout::default()
         .direction(Direction::Vertical)
         .margin(0)
         .constraints(
@@ -27,22 +26,22 @@ fn top_app_and_bottom_split(rect: Rect) -> (Rect, Rect, Rect) {
 
 pub struct Layout<'a> {
     pub header: HeaderDetails<'a>,
-    pub children: Vec<Table<'a>>,
+    pub children: Vec<Table>,
     pub footer: HelpText,
 }
 
-impl<'a> Layout<'a> {
+impl Layout<'_> {
     fn progressive_split(&self, rect: Rect, splits: Vec<Direction>) -> Vec<Rect> {
         splits
             .into_iter()
             .fold(vec![rect], |mut layout, direction| {
                 let last_rect = layout.pop().unwrap();
-                let mut halves = ::tui::layout::Layout::default()
+                let halves = ratatui::layout::Layout::default()
                     .direction(direction)
                     .margin(0)
                     .constraints([Constraint::Percentage(50), Constraint::Percentage(50)].as_ref())
                     .split(last_rect);
-                layout.append(&mut halves);
+                layout.append(&mut halves.to_vec());
                 layout
             })
     }
@@ -74,12 +73,12 @@ impl<'a> Layout<'a> {
             self.progressive_split(rect, vec![Direction::Vertical])
         } else {
             // default layout
-            let halves = ::tui::layout::Layout::default()
+            let halves = ratatui::layout::Layout::default()
                 .direction(Direction::Vertical)
                 .margin(0)
                 .constraints([Constraint::Percentage(50), Constraint::Percentage(50)].as_ref())
                 .split(rect);
-            let top_quarters = ::tui::layout::Layout::default()
+            let top_quarters = ratatui::layout::Layout::default()
                 .direction(Direction::Horizontal)
                 .margin(0)
                 .constraints([Constraint::Percentage(50), Constraint::Percentage(50)].as_ref())
@@ -100,12 +99,15 @@ impl<'a> Layout<'a> {
         }
     }
 
-    pub fn render(&self, frame: &mut Frame<impl Backend>, rect: Rect, ui_offset: usize) {
+    pub fn render(&self, frame: &mut Frame, rect: Rect, table_cycle_offset: usize) {
         let (top, app, bottom) = top_app_and_bottom_split(rect);
         let layout_slots = self.build_layout(app);
         for i in 0..layout_slots.len() {
             if let Some(rect) = layout_slots.get(i) {
-                if let Some(child) = self.children.get((i + ui_offset) % self.children.len()) {
+                if let Some(child) = self
+                    .children
+                    .get((i + table_cycle_offset) % self.children.len())
+                {
                     child.render(frame, *rect);
                 }
             }

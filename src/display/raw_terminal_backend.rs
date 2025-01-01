@@ -7,10 +7,14 @@
 // that implements the Backend TUI trait, but does nothing
 // this way, we don't need to create the TermionBackend
 // and thus skew our stdout when we don't need it
-use ::std::io;
-use ::tui::backend::Backend;
-use ::tui::buffer::Cell;
-use ::tui::layout::Rect;
+
+use std::io;
+
+use ratatui::{
+    backend::{Backend, WindowSize},
+    buffer::Cell,
+    layout::{Position, Size},
+};
 
 pub struct RawTerminalBackend {}
 
@@ -27,11 +31,11 @@ impl Backend for RawTerminalBackend {
         Ok(())
     }
 
-    fn get_cursor(&mut self) -> io::Result<(u16, u16)> {
-        Ok((0, 0))
+    fn get_cursor_position(&mut self) -> io::Result<Position> {
+        Ok(Position::new(0, 0))
     }
 
-    fn set_cursor(&mut self, _x: u16, _y: u16) -> io::Result<()> {
+    fn set_cursor_position<P: Into<Position>>(&mut self, _position: P) -> io::Result<()> {
         Ok(())
     }
 
@@ -42,8 +46,15 @@ impl Backend for RawTerminalBackend {
         Ok(())
     }
 
-    fn size(&self) -> io::Result<Rect> {
-        Ok(Rect::new(0, 0, 0, 0))
+    fn size(&self) -> io::Result<Size> {
+        Ok(Size::new(0, 0))
+    }
+
+    fn window_size(&mut self) -> io::Result<WindowSize> {
+        Ok(WindowSize {
+            columns_rows: Size::default(),
+            pixels: Size::default(),
+        })
     }
 
     fn flush(&mut self) -> io::Result<()> {

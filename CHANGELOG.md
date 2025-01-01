@@ -6,6 +6,118 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/)
 
 ## [Unreleased]
 
+### Fixed
+
+* Update CONTRIBUTING information #438 - @YJDoc2 @cyqsimon
+
+### Changed
+
+* Bump msrv to 1.75.0 #439 - @YJDoc2
+* Replace `derivative` with `derive_more` #439 - @YJDoc2
+* Add build optimizations for release binary #434 - @pando85
+* Minor cleanup and optimisations #435 - @cyqsimon
+* Bump `pnet` & `packet-builder` #444 - @cyqsimon
+* Switch from anyhow to eyre #450 - @cyqsimon
+
+## [0.23.1] - 2024-10-09
+
+### Fixed
+
+* CI: Use Powershell Compress-Archive to create Windows binary zip #424 - @cyqsimon
+* Exit gracefully when there is a broken pipe error #429 - @sigmaSd
+* Fix breaking changes of sysinfo crate #431 - @cyqsimon
+* Fix `clippy::needless_lifetimes` warnings on nightly #432 - @cyqsimon
+
+## [0.23.0] - 2024-08-17
+
+### Fixed
+
+* Remove redundant imports #377 - @cyqsimon
+* CI: use GitHub API to exempt dependabot from changelog requirement #378 - @cyqsimon
+* Remove unnecessary logging synchronisation #381 - @cyqsimon
+* Apply suggestions from new clippy lint clippy::assigning_clones #382 - @cyqsimon
+* Fix IPv6 socket detect logic #383 - @cyqsimon
+* Support build for `target_os` `android` #384 - @flxo
+* Fix Windows FP discrepancy issue in test #400 - @cyqsimon
+
+### Added
+
+* CI: include generated assets in release archive #359 - @cyqsimon
+* Add PID column to the process table #379 - @notjedi
+* CI: add builds for target `aarch64-linux-android` #384 - @flxo
+* CI: Keep GitHub Actions up to date with GitHub's Dependabot #403 - @cclauss
+* CI: Enable more cross-compiled builds #401 - @cyqsimon
+* CI: use sccache to speed up CI #408 - @cyqsimon
+
+### Changed
+
+* CI: strip release binaries for all targets #358 - @cyqsimon
+* Bump MSRV to 1.74 (required by clap 4.5; see #373)
+* CI: Configure dependabot grouping #395 - @cyqsimon
+* CI refactor #399 - @cyqsimon
+* CI: Temporarily disable UI tests #406 - @cyqsimon
+* Update README #407 - @cyqsimon
+* Update usage in README #409 - @cyqsimon
+
+### Removed
+
+* CI: Remove musl-tools install step #402 - @cyqsimon
+
+## [0.22.2] - 2024-01-28
+
+### Added
+
+* Generate completion & manpage #357 - @cyqsimon
+
+## [0.22.1] - 2024-01-28
+
+### Fixed
+
+* Hot fix a Windows compile issue #356 - @cyqsimon
+
+## [0.22.0] - 2024-01-28
+
+### Added
+
+* Log unresolved processes in more detail + general refactor #318 - @cyqsimon
+* Display bandwidth in different unit families #328 - @cyqsimon
+* CI: ensure a changelog entry exists for each PR #331 - @cyqsimon
+* Show interface names #340 - @ilyes-ced
+
+### Changed
+
+* Table formatting logic overhaul #305 - @cyqsimon
+* Refactor OsInputOutput (combine interfaces & frames into single Vec) #310 - @cyqsimon
+
+### Removed
+
+* Reorganise & cleanup packaging code/resources #329 - @cyqsimon
+
+### Fixed
+
+* Make logging race-free using a global lock & macro #309 - @cyqsimon
+* Use once_cell::sync::Lazy to make regex usage more ergonomic #313 - @cyqsimon
+* Fix vague CLI option documentation; closes #314 #316 - @cyqsimon
+
+## [0.21.1] - 2023-10-16
+
+### Fixed
+* Ignore connections that fail parsing instead of panicking on BSD (https://github.com/imsnif/bandwhich/pull/288) - [@cyqsimon](https://github.com/cyqsimon)
+* Add missing version flag to CLI (https://github.com/imsnif/bandwhich/pull/290) - [@tranzystorek-io](https://github.com/tranzystorek-io)
+* Various minor codestyle changes - [@cyqsimon](https://github.com/cyqsimon)
+* Handle IPv4-mapped IPv6 addresses when resolving connection owner (https://github.com/imsnif/bandwhich/commit/76956cf) - [@cyqsimon](https://github.com/cyqsimon)
+* Bump `rustix` dependencies to fix a memory leak (https://github.com/imsnif/bandwhich/commit/bc10c07) - [@cyqsimon](https://github.com/cyqsimon)
+
+### Added
+* Logging infrastrure (https://github.com/imsnif/bandwhich/pull/302) - [@cyqsimon](https://github.com/cyqsimon)
+
+## [0.21.0] - 2023-09-19
+
+### Fixed
+* Fixed resolv.conf errors on systems with trust-ad (https://github.com/imsnif/bandwhich/pull/201) - [@JoshLambda](https://github.com/JoshLambda)
+* Fixed build issues by updating various dependencies
+* migrate out-of-date dependency `structopt` to `clap` (https://github.com/imsnif/bandwhich/pull/285) - [@Liyixin95](https://github.com/Liyixin95)
+
 ## [0.20.0] - 2020-10-15
 
 ### Added

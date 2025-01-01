@@ -1,38 +1,49 @@
-use crate::tests::fakes::{
-    create_fake_dns_client, get_interfaces, get_open_sockets, NetworkFrames, TerminalEvent,
-    TerminalEvents, TestBackend,
+#![cfg_attr(not(feature = "ui_test"), allow(dead_code))]
+
+use std::{
+    collections::HashMap,
+    io::Write,
+    iter,
+    sync::{Arc, Mutex},
 };
-use std::iter;
 
-use crate::network::dns::Client;
-use crate::{Opt, OsInputOutput, RenderOpts};
-use ::crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
 use packet_builder::*;
-use pnet::datalink::DataLinkReceiver;
-use std::collections::HashMap;
-use std::io::Write;
-use std::sync::{Arc, Mutex};
-
-use packet_builder::payload::PayloadData;
-use pnet::packet::Packet;
+use pnet::{datalink::DataLinkReceiver, packet::Packet};
 use pnet_base::MacAddr;
+use rstest::fixture;
+
+use crate::{
+    network::dns::Client,
+    tests::fakes::{
+        create_fake_dns_client, get_interfaces_with_frames, get_open_sockets, NetworkFrames,
+        TerminalEvent, TerminalEvents, TestBackend,
+    },
+    Opt, OsInputOutput,
+};
 
 pub fn sleep_and_quit_events(sleep_num: usize) -> Box<TerminalEvents> {
-    let mut events: Vec<Option<Event>> = iter::repeat(None).take(sleep_num).collect();
-    events.push(Some(Event::Key(KeyEvent {
-        modifiers: KeyModifiers::CONTROL,
-        code: KeyCode::Char('c'),
-    })));
+    let events = iter::repeat(None)
+        .take(sleep_num)
+        .chain([Some(Event::Key(KeyEvent::new(
+            KeyCode::Char('c'),
+            KeyModifiers::CONTROL,
+        )))])
+        .collect();
     Box::new(TerminalEvents::new(events))
 }
 
 pub fn sleep_resize_and_quit_events(sleep_num: usize) -> Box<TerminalEvents> {
-    let mut events: Vec<Option<Event>> = iter::repeat(None).take(sleep_num).collect();
-    events.push(Some(Event::Resize(100, 100)));
-    events.push(Some(Event::Key(KeyEvent {
-        modifiers: KeyModifiers::CONTROL,
-        code: KeyCode::Char('c'),
-    })));
+    let events = iter::repeat(None)
+        .take(sleep_num)
+        .chain([
+            Some(Event::Resize(100, 100)),
+            Some(Event::Key(KeyEvent::new(
+                KeyCode::Char('c'),
+                KeyModifiers::CONTROL,
+            ))),
+        ])
+        .collect();
     Box::new(TerminalEvents::new(events))
 }
 
@@ -54,7 +65,8 @@ pub fn build_tcp_packet(
     pkt.packet().to_vec()
 }
 
-pub fn sample_frames() -> Vec<Box<dyn DataLinkReceiver>> {
+#[fixture]
+pub fn sample_frames_short() -> Vec<Box<dyn DataLinkReceiver>> {
     vec![NetworkFrames::new(vec![
         Some(build_tcp_packet(
             "10.0.0.2",
@@ -76,6 +88,125 @@ pub fn sample_frames() -> Vec<Box<dyn DataLinkReceiver>> {
             54321,
             53,
             b"I am a fake DNS query packet",
+        )),
+    ]) as Box<dyn DataLinkReceiver>]
+}
+
+#[fixture]
+pub fn sample_frames_sustained_one_process() -> Vec<Box<dyn DataLinkReceiver>> {
+    vec![NetworkFrames::new(vec![
+        Some(build_tcp_packet(
+            "1.1.1.1",
+            "10.0.0.2",
+            12345,
+            443,
+            b"I have come from 1.1.1.1",
+        )),
+        None, // sleep
+        Some(build_tcp_packet(
+            "1.1.1.1",
+            "10.0.0.2",
+            12345,
+            443,
+            b"Same here, but one second later",
+        )),
+    ]) as Box<dyn DataLinkReceiver>]
+}
+
+#[fixture]
+pub fn sample_frames_sustained_multiple_processes() -> Vec<Box<dyn DataLinkReceiver>> {
+    vec![NetworkFrames::new(vec![
+        Some(build_tcp_packet(
+            "1.1.1.1",
+            "10.0.0.2",
+            12345,
+            443,
+            b"I have come from 1.1.1.1",
+        )),
+        Some(build_tcp_packet(
+            "3.3.3.3",
+            "10.0.0.2",
+            1337,
+            4435,
+            b"I come from 3.3.3.3",
+        )),
+        None, // sleep
+        Some(build_tcp_packet(
+            "1.1.1.1",
+            "10.0.0.2",
+            12345,
+            443,
+            b"I have come from 1.1.1.1 one second later",
+        )),
+        Some(build_tcp_packet(
+            "3.3.3.3",
+            "10.0.0.2",
+            1337,
+            4435,
+            b"I come 3.3.3.3 one second later",
+        )),
+    ]) as Box<dyn DataLinkReceiver>]
+}
+
+#[fixture]
+pub fn sample_frames_sustained_long() -> Vec<Box<dyn DataLinkReceiver>> {
+    vec![NetworkFrames::new(vec![
+        Some(build_tcp_packet(
+            "10.0.0.2",
+            "3.3.3.3",
+            4435,
+            1337,
+            b"omw to 3.3.3.3",
+        )),
+        Some(build_tcp_packet(
+            "3.3.3.3",
+            "10.0.0.2",
+            1337,
+            4435,
+            b"I was just there!",
+        )),
+        Some(build_tcp_packet(
+            "1.1.1.1",
+            "10.0.0.2",
+            12345,
+            443,
+            b"Is it nice there? I think 1.1.1.1 is dull",
+        )),
+        Some(build_tcp_packet(
+            "10.0.0.2",
+            "1.1.1.1",
+            443,
+            12345,
+            b"Well, I heard 1.1.1.1 is all the rage",
+        )),
+        None, // sleep
+        Some(build_tcp_packet(
+            "10.0.0.2",
+            "3.3.3.3",
+            4435,
+            1337,
+            b"Wait for me!",
+        )),
+        Some(build_tcp_packet(
+            "3.3.3.3",
+            "10.0.0.2",
+            1337,
+            4435,
+            b"They're waiting for you...",
+        )),
+        Some(build_tcp_packet(
+            "1.1.1.1",
+            "10.0.0.2",
+            12345,
+            443,
+            b"1.1.1.1 forever!",
+        )),
+        Some(build_tcp_packet(
+            "10.0.0.2",
+            "1.1.1.1",
+            443,
+            12345,
+            b"10.0.0.2 forever!",
         )),
     ]) as Box<dyn DataLinkReceiver>]
 }
@@ -119,24 +250,25 @@ pub fn os_input_output_dns(
 }
 
 pub fn os_input_output_factory(
-    network_frames: Vec<Box<dyn DataLinkReceiver>>,
+    network_frames: impl IntoIterator<Item = Box<dyn DataLinkReceiver>>,
     stdout: Option<Arc<Mutex<Vec<u8>>>>,
     dns_client: Option<Client>,
     keyboard_events: Box<dyn Iterator<Item = Event> + Send>,
 ) -> OsInputOutput {
-    let write_to_stdout: Box<dyn FnMut(String) + Send> = match stdout {
+    let interfaces_with_frames = get_interfaces_with_frames(network_frames);
+
+    let write_to_stdout: Box<dyn FnMut(&str) + Send> = match stdout {
         Some(stdout) => Box::new({
-            move |output: String| {
+            move |output| {
                 let mut stdout = stdout.lock().unwrap();
                 writeln!(&mut stdout, "{}", output).unwrap();
             }
         }),
-        None => Box::new(move |_output: String| {}),
+        None => Box::new(|_output| {}),
     };
 
     OsInputOutput {
-        network_interfaces: get_interfaces(),
-        network_frames,
+        interfaces_with_frames,
         get_open_sockets,
         terminal_events: keyboard_events,
         dns_client,
@@ -145,28 +277,19 @@ pub fn os_input_output_factory(
 }
 
 pub fn opts_raw() -> Opt {
-    opts_factory(true)
-}
-
-pub fn opts_ui() -> Opt {
-    opts_factory(false)
-}
-
-fn opts_factory(raw: bool) -> Opt {
     Opt {
         interface: Some(String::from("interface_name")),
-        raw,
-        no_resolve: false,
-        show_dns: false,
-        dns_server: None,
-        render_opts: RenderOpts {
-            addresses: false,
-            connections: false,
-            processes: false,
-            total_utilization: false,
-        },
+        raw: true,
+        ..Default::default()
     }
 }
+pub fn opts_ui() -> Opt {
+    Opt {
+        interface: Some(String::from("interface_name")),
+        ..Default::default()
+    }
+}
+
 type BackendWithStreams = (
     Arc<Mutex<Vec<TerminalEvent>>>,
     Arc<Mutex<Vec<String>>>,

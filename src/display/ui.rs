@@ -1,17 +1,17 @@
-use ::std::collections::HashMap;
+use std::{collections::HashMap, net::IpAddr, time::Duration};
 
-use ::tui::backend::Backend;
-use ::tui::Terminal;
-
-use crate::display::components::{HeaderDetails, HelpText, Layout, Table};
-use crate::display::UIState;
-use crate::network::{display_connection_string, display_ip_or_host, LocalSocket, Utilization};
-
-use ::std::net::IpAddr;
-
-use crate::RenderOpts;
 use chrono::prelude::*;
-use std::time::Duration;
+use ratatui::{backend::Backend, Terminal};
+
+use crate::{
+    cli::{Opt, RenderOpts},
+    display::{
+        components::{HeaderDetails, HelpText, Layout, Table},
+        UIState,
+    },
+    network::{display_connection_string, display_ip_or_host, LocalSocket, Utilization},
+    os::ProcessInfo,
+};
 
 pub struct Ui<B>
 where
@@ -27,35 +27,38 @@ impl<B> Ui<B>
 where
     B: Backend,
 {
-    pub fn new(terminal_backend: B, opts: RenderOpts) -> Self {
+    pub fn new(terminal_backend: B, opts: &Opt) -> Self {
         let mut terminal = Terminal::new(terminal_backend).unwrap();
         terminal.clear().unwrap();
         terminal.hide_cursor().unwrap();
-        let state = UIState {
-            cumulative_mode: opts.total_utilization,
-            ..Default::default()
+        let state = {
+            let mut state = UIState::default();
+            state.interface_name.clone_from(&opts.interface);
+            state.unit_family = opts.render_opts.unit_family.into();
+            state.cumulative_mode = opts.render_opts.total_utilization;
+            state.show_dns = opts.show_dns;
+            state
         };
         Ui {
             terminal,
             state,
             ip_to_host: Default::default(),
-            opts,
+            opts: opts.render_opts,
         }
     }
-    pub fn output_text(&mut self, write_to_stdout: &mut (dyn FnMut(String) + Send)) {
+    pub fn output_text(&mut self, write_to_stdout: &mut (dyn FnMut(&str) + Send)) {
         let state = &self.state;
         let ip_to_host = &self.ip_to_host;
         let local_time: DateTime<Local> = Local::now();
         let timestamp = local_time.timestamp();
         let mut no_traffic = true;
 
-        let output_process_data = |write_to_stdout: &mut (dyn FnMut(String) + Send),
+        let output_process_data = |write_to_stdout: &mut (dyn FnMut(&str) + Send),
                                    no_traffic: &mut bool| {
-            for (process, process_network_data) in &state.processes {
-                write_to_stdout(format!(
-                    "process: <{}> \"{}\" up/down Bps: {}/{} connections: {}",
-                    timestamp,
-                    process,
+            for (proc_info, process_network_data) in &state.processes {
+                write_to_stdout(&format!(
+                    "process: <{timestamp}> \"{}\" up/down Bps: {}/{} connections: {}",
+                    proc_info.name,
                     process_network_data.total_bytes_uploaded,
                     process_network_data.total_bytes_downloaded,
                     process_network_data.connection_count
@@ -65,11 +68,10 @@ where
         };
 
         let output_connections_data =
-            |write_to_stdout: &mut (dyn FnMut(String) + Send), no_traffic: &mut bool| {
+            |write_to_stdout: &mut (dyn FnMut(&str) + Send), no_traffic: &mut bool| {
                 for (connection, connection_network_data) in &state.connections {
-                    write_to_stdout(format!(
-                        "connection: <{}> {} up/down Bps: {}/{} process: \"{}\"",
-                        timestamp,
+                    write_to_stdout(&format!(
+                        "connection: <{timestamp}> {} up/down Bps: {}/{} process: \"{}\"",
                         display_connection_string(
                             connection,
                             ip_to_host,
@@ -83,12 +85,11 @@ where
                 }
             };
 
-        let output_adressess_data = |write_to_stdout: &mut (dyn FnMut(String) + Send),
+        let output_adressess_data = |write_to_stdout: &mut (dyn FnMut(&str) + Send),
                                      no_traffic: &mut bool| {
             for (remote_address, remote_address_network_data) in &state.remote_addresses {
-                write_to_stdout(format!(
-                    "remote_address: <{}> {} up/down Bps: {}/{} connections: {}",
-                    timestamp,
+                write_to_stdout(&format!(
+                    "remote_address: <{timestamp}> {} up/down Bps: {}/{} connections: {}",
                     display_ip_or_host(*remote_address, ip_to_host),
                     remote_address_network_data.total_bytes_uploaded,
                     remote_address_network_data.total_bytes_downloaded,
@@ -99,7 +100,7 @@ where
         };
 
         // header
-        write_to_stdout("Refreshing:".into());
+        write_to_stdout("Refreshing:");
 
         // body1
         if self.opts.processes {
@@ -119,36 +120,32 @@ where
 
         // body2: In case no traffic is detected
         if no_traffic {
-            write_to_stdout("<NO TRAFFIC>".into());
+            write_to_stdout("<NO TRAFFIC>");
         }
 
         // footer
-        write_to_stdout("".into());
+        write_to_stdout("");
     }
 
-    pub fn draw(&mut self, paused: bool, show_dns: bool, elapsed_time: Duration, ui_offset: usize) {
-        let state = &self.state;
-        let children = self.get_tables_to_display();
+    pub fn draw(&mut self, paused: bool, elapsed_time: Duration, table_cycle_offset: usize) {
+        let layout = Layout {
+            header: HeaderDetails {
+                state: &self.state,
+                elapsed_time,
+                paused,
+            },
+            children: self.get_tables_to_display(),
+            footer: HelpText {
+                paused,
+                show_dns: self.state.show_dns,
+            },
+        };
         self.terminal
-            .draw(|mut frame| {
-                let size = frame.size();
-                let total_bandwidth = HeaderDetails {
-                    state: &state,
-                    elapsed_time,
-                    paused,
-                };
-                let help_text = HelpText { paused, show_dns };
-                let layout = Layout {
-                    header: total_bandwidth,
-                    children,
-                    footer: help_text,
-                };
-                layout.render(&mut frame, size, ui_offset);
-            })
+            .draw(|frame| layout.render(frame, frame.area(), table_cycle_offset))
             .unwrap();
     }
 
-    fn get_tables_to_display(&self) -> Vec<Table<'static>> {
+    fn get_tables_to_display(&self) -> Vec<Table> {
         let opts = &self.opts;
         let mut children: Vec<Table> = Vec::new();
         if opts.processes {
@@ -182,7 +179,7 @@ where
 
     pub fn update_state(
         &mut self,
-        connections_to_procs: HashMap<LocalSocket, String>,
+        connections_to_procs: HashMap<LocalSocket, ProcessInfo>,
         utilization: Utilization,
         ip_to_host: HashMap<IpAddr, String>,
     ) {
@@ -190,7 +187,6 @@ where
         self.ip_to_host.extend(ip_to_host);
     }
     pub fn end(&mut self) {
-        self.terminal.clear().unwrap();
         self.terminal.show_cursor().unwrap();
     }
 }

@@ -1,24 +1,31 @@
-use ::std::boxed::Box;
+use std::{
+    io::{self, Result},
+    net::{IpAddr, SocketAddr},
+    thread::park_timeout,
+    time::Duration,
+};
 
-use ::pnet::datalink::{DataLinkReceiver, NetworkInterface};
-use ::pnet::packet::ethernet::{EtherTypes, EthernetPacket};
-use ::pnet::packet::ip::{IpNextHeaderProtocol, IpNextHeaderProtocols};
-use ::pnet::packet::ipv4::Ipv4Packet;
-use ::pnet::packet::ipv6::Ipv6Packet;
-use ::pnet::packet::tcp::TcpPacket;
-use ::pnet::packet::udp::UdpPacket;
-use ::pnet::packet::Packet;
+use ipnetwork::IpNetwork;
+use pnet::{
+    datalink::{DataLinkReceiver, NetworkInterface},
+    packet::{
+        ethernet::{EtherTypes, EthernetPacket},
+        ip::{IpNextHeaderProtocol, IpNextHeaderProtocols},
+        ipv4::Ipv4Packet,
+        ipv6::Ipv6Packet,
+        tcp::TcpPacket,
+        udp::UdpPacket,
+        Packet,
+    },
+};
 
-use ::ipnetwork::IpNetwork;
-use ::std::io::{self, Result};
-use ::std::net::{IpAddr, SocketAddr};
-use ::std::thread::park_timeout;
+use crate::{
+    network::{Connection, Protocol},
+    os::shared::get_datalink_channel,
+};
 
-use crate::network::{Connection, Protocol};
-use crate::os::shared::get_datalink_channel;
-
-const PACKET_WAIT_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(10);
-const CHANNEL_RESET_DELAY: std::time::Duration = std::time::Duration::from_millis(1000);
+const PACKET_WAIT_TIMEOUT: Duration = Duration::from_millis(10);
+const CHANNEL_RESET_DELAY: Duration = Duration::from_millis(1000);
 
 #[derive(Debug)]
 pub struct Segment {
@@ -86,19 +93,19 @@ macro_rules! extract_transport_protocol {
 pub struct Sniffer {
     network_interface: NetworkInterface,
     network_frames: Box<dyn DataLinkReceiver>,
-    dns_shown: bool,
+    show_dns: bool,
 }
 
 impl Sniffer {
     pub fn new(
         network_interface: NetworkInterface,
         network_frames: Box<dyn DataLinkReceiver>,
-        dns_shown: bool,
+        show_dns: bool,
     ) -> Self {
         Sniffer {
             network_interface,
             network_frames,
-            dns_shown,
+            show_dns,
         }
     }
     pub fn next(&mut self) -> Option<Segment> {
@@ -131,7 +138,7 @@ impl Sniffer {
         let version = ip_packet.get_version();
 
         match version {
-            4 => Self::handle_v4(ip_packet, &self.network_interface, self.dns_shown),
+            4 => Self::handle_v4(ip_packet, &self.network_interface, self.show_dns),
             6 => Self::handle_v6(
                 Ipv6Packet::new(&bytes[payload_offset..])?,
                 &self.network_interface,
@@ -142,7 +149,7 @@ impl Sniffer {
                     EtherTypes::Ipv4 => Self::handle_v4(
                         Ipv4Packet::new(pkg.payload())?,
                         &self.network_interface,
-                        self.dns_shown,
+                        self.show_dns,
                     ),
                     EtherTypes::Ipv6 => {
                         Self::handle_v6(Ipv6Packet::new(pkg.payload())?, &self.network_interface)

@@ -1,9 +1,10 @@
-use ::tui::backend::Backend;
-use ::tui::layout::{Alignment, Rect};
-use ::tui::style::{Modifier, Style};
-use ::tui::terminal::Frame;
-use ::tui::text::Span;
-use ::tui::widgets::Paragraph;
+use ratatui::{
+    layout::{Alignment, Rect},
+    style::{Modifier, Style},
+    text::Span,
+    widgets::Paragraph,
+    Frame,
+};
 
 pub struct HelpText {
     pub paused: bool,
@@ -20,7 +21,7 @@ const TEXT_WHEN_DNS_SHOWN: &str = " (DNS queries shown).";
 const TEXT_TAB_TIP: &str = " Use <TAB> to rearrange tables.";
 
 impl HelpText {
-    pub fn render(&self, frame: &mut Frame<impl Backend>, rect: Rect) {
+    pub fn render(&self, frame: &mut Frame, rect: Rect) {
         let pause_content = if self.paused {
             TEXT_WHEN_PAUSED
         } else {

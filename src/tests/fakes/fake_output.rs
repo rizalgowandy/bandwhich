@@ -1,9 +1,14 @@
-use ::std::collections::HashMap;
-use ::std::io;
-use ::std::sync::{Arc, Mutex};
-use ::tui::backend::Backend;
-use ::tui::buffer::Cell;
-use ::tui::layout::Rect;
+use std::{
+    collections::HashMap,
+    io,
+    sync::{Arc, Mutex},
+};
+
+use ratatui::{
+    backend::{Backend, WindowSize},
+    buffer::Cell,
+    layout::{Position, Size},
+};
 
 #[derive(Hash, Debug, PartialEq)]
 pub enum TerminalEvent {
@@ -60,12 +65,12 @@ impl Backend for TestBackend {
         Ok(())
     }
 
-    fn get_cursor(&mut self) -> io::Result<(u16, u16)> {
+    fn get_cursor_position(&mut self) -> io::Result<Position> {
         self.events.lock().unwrap().push(TerminalEvent::GetCursor);
-        Ok((0, 0))
+        Ok(Position::new(0, 0))
     }
 
-    fn set_cursor(&mut self, _x: u16, _y: u16) -> io::Result<()> {
+    fn set_cursor_position<P: Into<Position>>(&mut self, _position: P) -> io::Result<()> {
         Ok(())
     }
 
@@ -88,7 +93,7 @@ impl Backend for TestBackend {
                     Some(cell) => {
                         // this will contain no style information at all
                         // should be good enough for testing
-                        string.push_str(&cell.symbol);
+                        string.push_str(cell.symbol());
                     }
                     None => {
                         string.push(' ');
@@ -101,11 +106,21 @@ impl Backend for TestBackend {
         Ok(())
     }
 
-    fn size(&self) -> io::Result<Rect> {
+    fn size(&self) -> io::Result<Size> {
         let terminal_height = self.terminal_height.lock().unwrap();
         let terminal_width = self.terminal_width.lock().unwrap();
 
-        Ok(Rect::new(0, 0, *terminal_width, *terminal_height))
+        Ok(Size::new(*terminal_width, *terminal_height))
+    }
+
+    fn window_size(&mut self) -> io::Result<WindowSize> {
+        let width = *self.terminal_width.lock().unwrap();
+        let height = *self.terminal_height.lock().unwrap();
+
+        Ok(WindowSize {
+            columns_rows: Size { width, height },
+            pixels: Size::default(),
+        })
     }
 
     fn flush(&mut self) -> io::Result<()> {

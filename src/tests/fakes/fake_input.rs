@@ -1,18 +1,22 @@
-use ::async_trait::async_trait;
-use ::crossterm::event::Event;
-use ::ipnetwork::IpNetwork;
-use ::pnet::datalink::DataLinkReceiver;
-use ::pnet::datalink::NetworkInterface;
-use ::std::collections::HashMap;
-use ::std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use ::std::{thread, time};
-use ::tokio::runtime::Runtime;
+use std::{
+    collections::HashMap,
+    net::{IpAddr, Ipv4Addr, SocketAddr},
+    thread, time,
+};
+
+use async_trait::async_trait;
+use crossterm::event::Event;
+use ipnetwork::IpNetwork;
+use itertools::Itertools;
+use pnet::datalink::{DataLinkReceiver, NetworkInterface};
+use tokio::runtime::Runtime;
 
 use crate::{
     network::{
         dns::{self, Lookup},
         Connection, Protocol,
     },
+    os::ProcessInfo,
     OpenSockets,
 };
 
@@ -54,10 +58,10 @@ impl NetworkFrames {
             current_index: 0,
         })
     }
-    fn next_packet(&mut self) -> &Option<Vec<u8>> {
+    fn next_packet(&mut self) -> Option<&[u8]> {
         let next_index = self.current_index;
         self.current_index += 1;
-        &self.packets[next_index]
+        self.packets.get(next_index).and_then(|p| p.as_deref())
     }
 }
 impl DataLinkReceiver for NetworkFrames {
@@ -70,15 +74,15 @@ impl DataLinkReceiver for NetworkFrames {
         if self.current_index < self.packets.len() {
             let action = self.next_packet();
             match action {
-                Some(packet) => Ok(&packet[..]),
+                Some(packet) => Ok(packet),
                 None => {
                     thread::sleep(time::Duration::from_secs(1));
-                    Ok(&[][..])
+                    Ok(&[])
                 }
             }
         } else {
             thread::sleep(time::Duration::from_secs(1));
-            Ok(&[][..])
+            Ok(&[])
         }
     }
 }
@@ -93,7 +97,7 @@ pub fn get_open_sockets() -> OpenSockets {
             443,
             Protocol::Tcp,
         ),
-        String::from("1"),
+        ProcessInfo::new("1", 1),
     );
     open_sockets.insert(
         Connection::new(
@@ -102,7 +106,7 @@ pub fn get_open_sockets() -> OpenSockets {
             4434,
             Protocol::Tcp,
         ),
-        String::from("4"),
+        ProcessInfo::new("4", 4),
     );
     open_sockets.insert(
         Connection::new(
@@ -111,7 +115,7 @@ pub fn get_open_sockets() -> OpenSockets {
             4435,
             Protocol::Tcp,
         ),
-        String::from("5"),
+        ProcessInfo::new("5", 5),
     );
     open_sockets.insert(
         Connection::new(
@@ -120,7 +124,7 @@ pub fn get_open_sockets() -> OpenSockets {
             4432,
             Protocol::Tcp,
         ),
-        String::from("2"),
+        ProcessInfo::new("2", 2),
     );
     open_sockets.insert(
         Connection::new(
@@ -129,12 +133,12 @@ pub fn get_open_sockets() -> OpenSockets {
             443,
             Protocol::Tcp,
         ),
-        String::from("1"),
+        ProcessInfo::new("1", 1),
     );
     let mut local_socket_to_procs = HashMap::new();
     let mut connections = std::vec::Vec::new();
-    for (connection, process_name) in open_sockets {
-        local_socket_to_procs.insert(connection.local_socket, process_name);
+    for (connection, proc_info) in open_sockets {
+        local_socket_to_procs.insert(connection.local_socket, proc_info);
         connections.push(connection);
     }
 
@@ -146,6 +150,7 @@ pub fn get_open_sockets() -> OpenSockets {
 pub fn get_interfaces() -> Vec<NetworkInterface> {
     vec![NetworkInterface {
         name: String::from("interface_name"),
+        description: String::from("Fake interface"),
         index: 42,
         mac: None,
         ips: vec![IpNetwork::V4("10.0.0.2".parse().unwrap())],
@@ -154,6 +159,12 @@ pub fn get_interfaces() -> Vec<NetworkInterface> {
         // at offset 14
         flags: 0,
     }]
+}
+
+pub fn get_interfaces_with_frames(
+    frames: impl IntoIterator<Item = Box<dyn DataLinkReceiver>>,
+) -> Vec<(NetworkInterface, Box<dyn DataLinkReceiver>)> {
+    get_interfaces().into_iter().zip_eq(frames).collect()
 }
 
 pub fn create_fake_dns_client(ips_to_hosts: HashMap<IpAddr, String>) -> Option<dns::Client> {

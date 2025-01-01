@@ -1,6 +1,6 @@
-use crate::network::{Connection, Direction, Segment};
+use std::collections::HashMap;
 
-use ::std::collections::HashMap;
+use crate::network::{Connection, Direction, Segment};
 
 #[derive(Clone)]
 pub struct ConnectionInfo {
@@ -24,7 +24,7 @@ impl Utilization {
         self.connections.clear();
         clone
     }
-    pub fn update(&mut self, seg: Segment) {
+    pub fn ingest(&mut self, seg: Segment) {
         let total_bandwidth = self
             .connections
             .entry(seg.connection)

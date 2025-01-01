@@ -1,24 +1,30 @@
-use crate::tests::fakes::TerminalEvent::*;
-use crate::tests::fakes::{
-    create_fake_dns_client, get_interfaces, get_open_sockets, NetworkFrames,
-};
+use std::{collections::HashMap, net::IpAddr};
 
-use ::insta::assert_snapshot;
-
-use ::std::collections::HashMap;
-use ::std::net::IpAddr;
-
-use crate::tests::cases::test_utils::{
-    build_tcp_packet, opts_ui, os_input_output, os_input_output_factory, sample_frames,
-    sleep_and_quit_events, sleep_resize_and_quit_events, test_backend_factory,
-};
-use ::crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+use insta::{assert_debug_snapshot, assert_snapshot};
+use itertools::Itertools;
 use pnet::datalink::DataLinkReceiver;
-use std::iter;
+use rstest::rstest;
 
-use crate::tests::fakes::TerminalEvents;
+use crate::{
+    cli::RenderOpts,
+    start,
+    tests::{
+        cases::test_utils::{
+            build_tcp_packet, opts_ui, os_input_output, os_input_output_factory,
+            sample_frames_short, sample_frames_sustained_long,
+            sample_frames_sustained_multiple_processes, sample_frames_sustained_one_process,
+            sleep_and_quit_events, sleep_resize_and_quit_events, test_backend_factory,
+        },
+        fakes::{
+            create_fake_dns_client, get_interfaces_with_frames, get_open_sockets, NetworkFrames,
+            TerminalEvents,
+        },
+    },
+    Opt, OsInputOutput,
+};
 
-use crate::{start, Opt, OsInputOutput, RenderOpts};
+const SNAPSHOT_SECTION_SEPARATOR: &str = "\n--- SECTION SEPARATOR ---\n";
 
 #[test]
 fn basic_startup() {
@@ -30,18 +36,12 @@ fn basic_startup() {
     let os_input = os_input_output(network_frames, 1);
     let opts = opts_ui();
     start(backend, os_input, opts);
-    let terminal_draw_events_mirror = terminal_draw_events.lock().unwrap();
 
-    let expected_terminal_events = vec![
-        Clear, HideCursor, Draw, HideCursor, Flush, Clear, ShowCursor,
-    ];
-    assert_eq!(
-        &terminal_events.lock().unwrap()[..],
-        &expected_terminal_events[..]
-    );
-
-    assert_eq!(terminal_draw_events_mirror.len(), 1);
-    assert_snapshot!(&terminal_draw_events_mirror[0]);
+    assert_snapshot!(terminal_draw_events
+        .lock()
+        .unwrap()
+        .join(SNAPSHOT_SECTION_SEPARATOR));
+    assert_debug_snapshot!(terminal_events.lock().unwrap().as_slice());
 }
 
 #[test]
@@ -66,41 +66,29 @@ fn pause_by_space() {
         )),
     ]) as Box<dyn DataLinkReceiver>];
 
-    // sleep for 1s, then press space, sleep for 2s, then quit
-    let mut events: Vec<Option<Event>> = iter::repeat(None).take(1).collect();
-    events.push(Some(Event::Key(KeyEvent {
-        modifiers: KeyModifiers::NONE,
-        code: KeyCode::Char(' '),
-    })));
-    events.push(None);
-    events.push(None);
-    events.push(Some(Event::Key(KeyEvent {
-        modifiers: KeyModifiers::NONE,
-        code: KeyCode::Char(' '),
-    })));
-    events.push(Some(Event::Key(KeyEvent {
-        modifiers: KeyModifiers::CONTROL,
-        code: KeyCode::Char('c'),
-    })));
+    let events = [
+        None,
+        Some(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE)),
+        None,
+        None,
+        Some(KeyEvent::new(KeyCode::Char(' '), KeyModifiers::NONE)),
+        Some(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+    ]
+    .into_iter()
+    .map(|ke| ke.map(Event::Key))
+    .collect_vec();
 
     let events = Box::new(TerminalEvents::new(events));
     let os_input = os_input_output_factory(network_frames, None, None, events);
     let (terminal_events, terminal_draw_events, backend) = test_backend_factory(190, 50);
     let opts = opts_ui();
     start(backend, os_input, opts);
-    let terminal_draw_events_mirror = terminal_draw_events.lock().unwrap();
-    let expected_terminal_events = vec![
-        Clear, HideCursor, Draw, HideCursor, Flush, Draw, HideCursor, Flush, Draw, HideCursor,
-        Flush, Clear, ShowCursor,
-    ];
-    assert_eq!(
-        &terminal_events.lock().unwrap()[..],
-        &expected_terminal_events[..]
-    );
-    assert_eq!(terminal_draw_events_mirror.len(), 3);
-    assert_snapshot!(&terminal_draw_events_mirror[0]);
-    assert_snapshot!(&terminal_draw_events_mirror[1]);
-    assert_snapshot!(&terminal_draw_events_mirror[2]);
+
+    assert_snapshot!(terminal_draw_events
+        .lock()
+        .unwrap()
+        .join(SNAPSHOT_SECTION_SEPARATOR));
+    assert_debug_snapshot!(terminal_events.lock().unwrap().as_slice());
 }
 
 #[test]
@@ -125,40 +113,29 @@ fn rearranged_by_tab() {
         )),
     ]) as Box<dyn DataLinkReceiver>];
 
-    // sleep for 1s, then press tab, sleep for 2s, then quit
-    let mut events: Vec<Option<Event>> = iter::repeat(None).take(1).collect();
-    events.push(None);
-    events.push(Some(Event::Key(KeyEvent {
-        modifiers: KeyModifiers::NONE,
-        code: KeyCode::Tab,
-    })));
-    events.push(None);
-    events.push(None);
-    events.push(Some(Event::Key(KeyEvent {
-        modifiers: KeyModifiers::CONTROL,
-        code: KeyCode::Char('c'),
-    })));
+    let events = [
+        None,
+        None,
+        Some(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)),
+        None,
+        None,
+        Some(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+    ]
+    .into_iter()
+    .map(|ke| ke.map(Event::Key))
+    .collect_vec();
 
     let events = Box::new(TerminalEvents::new(events));
     let os_input = os_input_output_factory(network_frames, None, None, events);
     let (terminal_events, terminal_draw_events, backend) = test_backend_factory(190, 50);
     let opts = opts_ui();
     start(backend, os_input, opts);
-    let terminal_draw_events_mirror = terminal_draw_events.lock().unwrap();
-    let expected_terminal_events = vec![
-        Clear, HideCursor, Draw, HideCursor, Flush, Draw, HideCursor, Flush, Draw, HideCursor,
-        Flush, Draw, HideCursor, Flush, Draw, HideCursor, Flush, Clear, ShowCursor,
-    ];
-    assert_eq!(
-        &terminal_events.lock().unwrap()[..],
-        &expected_terminal_events[..]
-    );
-    assert_eq!(terminal_draw_events_mirror.len(), 5);
-    assert_snapshot!(&terminal_draw_events_mirror[0]);
-    assert_snapshot!(&terminal_draw_events_mirror[1]);
-    assert_snapshot!(&terminal_draw_events_mirror[2]);
-    assert_snapshot!(&terminal_draw_events_mirror[3]);
-    assert_snapshot!(&terminal_draw_events_mirror[4]);
+
+    assert_snapshot!(terminal_draw_events
+        .lock()
+        .unwrap()
+        .join(SNAPSHOT_SECTION_SEPARATOR));
+    assert_debug_snapshot!(terminal_events.lock().unwrap().as_slice());
 }
 
 #[test]
@@ -170,22 +147,18 @@ fn basic_only_processes() {
     let (_, terminal_draw_events, backend) = test_backend_factory(190, 50);
     let os_input = os_input_output(network_frames, 1);
     let opts = Opt {
-        interface: Some(String::from("interface_name")),
-        raw: false,
-        no_resolve: false,
-        show_dns: false,
-        dns_server: None,
         render_opts: RenderOpts {
-            addresses: false,
-            connections: false,
             processes: true,
-            total_utilization: false,
+            ..Default::default()
         },
+        ..opts_ui()
     };
-
     start(backend, os_input, opts);
-    let terminal_draw_events_mirror = terminal_draw_events.lock().unwrap();
-    assert_snapshot!(&terminal_draw_events_mirror[0]);
+
+    assert_snapshot!(terminal_draw_events
+        .lock()
+        .unwrap()
+        .join(SNAPSHOT_SECTION_SEPARATOR));
 }
 
 #[test]
@@ -197,22 +170,19 @@ fn basic_processes_with_dns_queries() {
     let (_, terminal_draw_events, backend) = test_backend_factory(190, 50);
     let os_input = os_input_output(network_frames, 1);
     let opts = Opt {
-        interface: Some(String::from("interface_name")),
-        raw: false,
-        no_resolve: false,
         show_dns: true,
-        dns_server: None,
         render_opts: RenderOpts {
-            addresses: false,
-            connections: false,
             processes: true,
-            total_utilization: false,
+            ..Default::default()
         },
+        ..opts_ui()
     };
-
     start(backend, os_input, opts);
-    let terminal_draw_events_mirror = terminal_draw_events.lock().unwrap();
-    assert_snapshot!(&terminal_draw_events_mirror[0]);
+
+    assert_snapshot!(terminal_draw_events
+        .lock()
+        .unwrap()
+        .join(SNAPSHOT_SECTION_SEPARATOR));
 }
 
 #[test]
@@ -224,22 +194,18 @@ fn basic_only_connections() {
     let (_, terminal_draw_events, backend) = test_backend_factory(190, 50);
     let os_input = os_input_output(network_frames, 1);
     let opts = Opt {
-        interface: Some(String::from("interface_name")),
-        raw: false,
-        no_resolve: false,
-        show_dns: false,
-        dns_server: None,
         render_opts: RenderOpts {
-            addresses: false,
             connections: true,
-            processes: false,
-            total_utilization: false,
+            ..Default::default()
         },
+        ..opts_ui()
     };
-
     start(backend, os_input, opts);
-    let terminal_draw_events_mirror = terminal_draw_events.lock().unwrap();
-    assert_snapshot!(&terminal_draw_events_mirror[0]);
+
+    assert_snapshot!(terminal_draw_events
+        .lock()
+        .unwrap()
+        .join(SNAPSHOT_SECTION_SEPARATOR));
 }
 
 #[test]
@@ -251,100 +217,75 @@ fn basic_only_addresses() {
     let (_, terminal_draw_events, backend) = test_backend_factory(190, 50);
     let os_input = os_input_output(network_frames, 1);
     let opts = Opt {
-        interface: Some(String::from("interface_name")),
-        raw: false,
-        no_resolve: false,
-        show_dns: false,
-        dns_server: None,
         render_opts: RenderOpts {
             addresses: true,
-            connections: false,
-            processes: false,
-            total_utilization: false,
+            ..Default::default()
         },
+        ..opts_ui()
     };
-
     start(backend, os_input, opts);
-    let terminal_draw_events_mirror = terminal_draw_events.lock().unwrap();
-    assert_snapshot!(&terminal_draw_events_mirror[0]);
+
+    assert_snapshot!(terminal_draw_events
+        .lock()
+        .unwrap()
+        .join(SNAPSHOT_SECTION_SEPARATOR));
 }
 
-#[test]
-fn two_packets_only_processes() {
-    let network_frames = sample_frames();
-
+#[rstest(sample_frames_short as frames)]
+fn two_packets_only_processes(frames: Vec<Box<dyn DataLinkReceiver>>) {
     let (_, terminal_draw_events, backend) = test_backend_factory(190, 50);
-    let os_input = os_input_output(network_frames, 2);
+    let os_input = os_input_output(frames, 2);
     let opts = Opt {
-        interface: Some(String::from("interface_name")),
-        raw: false,
-        no_resolve: false,
-        show_dns: false,
-        dns_server: None,
         render_opts: RenderOpts {
-            addresses: false,
-            connections: false,
             processes: true,
-            total_utilization: false,
+            ..Default::default()
         },
+        ..opts_ui()
     };
-
     start(backend, os_input, opts);
-    let terminal_draw_events_mirror = terminal_draw_events.lock().unwrap();
-    assert_snapshot!(&terminal_draw_events_mirror[0]);
-    assert_snapshot!(&terminal_draw_events_mirror[1]);
+
+    assert_snapshot!(terminal_draw_events
+        .lock()
+        .unwrap()
+        .join(SNAPSHOT_SECTION_SEPARATOR));
 }
 
-#[test]
-fn two_packets_only_connections() {
-    let network_frames = sample_frames();
-
+#[rstest(sample_frames_short as frames)]
+fn two_packets_only_connections(frames: Vec<Box<dyn DataLinkReceiver>>) {
     let (_, terminal_draw_events, backend) = test_backend_factory(190, 50);
-    let os_input = os_input_output(network_frames, 2);
+    let os_input = os_input_output(frames, 2);
     let opts = Opt {
-        interface: Some(String::from("interface_name")),
-        raw: false,
-        no_resolve: false,
-        show_dns: false,
-        dns_server: None,
         render_opts: RenderOpts {
-            addresses: false,
             connections: true,
-            processes: false,
-            total_utilization: false,
+            ..Default::default()
         },
+        ..opts_ui()
     };
-
     start(backend, os_input, opts);
-    let terminal_draw_events_mirror = terminal_draw_events.lock().unwrap();
-    assert_snapshot!(&terminal_draw_events_mirror[0]);
-    assert_snapshot!(&terminal_draw_events_mirror[1]);
+
+    assert_snapshot!(terminal_draw_events
+        .lock()
+        .unwrap()
+        .join(SNAPSHOT_SECTION_SEPARATOR));
 }
 
-#[test]
-fn two_packets_only_addresses() {
-    let network_frames = sample_frames();
-
+#[rstest(sample_frames_short as frames)]
+fn two_packets_only_addresses(frames: Vec<Box<dyn DataLinkReceiver>>) {
     let (_, terminal_draw_events, backend) = test_backend_factory(190, 50);
-    let os_input = os_input_output(network_frames, 2);
+    let os_input = os_input_output(frames, 2);
     let opts = Opt {
-        interface: Some(String::from("interface_name")),
-        raw: false,
-        no_resolve: false,
-        show_dns: false,
-        dns_server: None,
         render_opts: RenderOpts {
             addresses: true,
-            connections: false,
-            processes: false,
-            total_utilization: false,
+            ..Default::default()
         },
+        ..opts_ui()
     };
-
     start(backend, os_input, opts);
-    let terminal_draw_events_mirror = terminal_draw_events.lock().unwrap();
-    assert_snapshot!(&terminal_draw_events_mirror[0]);
-    assert_snapshot!(&terminal_draw_events_mirror[1]);
+
+    assert_snapshot!(terminal_draw_events
+        .lock()
+        .unwrap()
+        .join(SNAPSHOT_SECTION_SEPARATOR));
 }
 
 #[test]
@@ -356,22 +297,19 @@ fn two_windows_split_horizontally() {
     let (_, terminal_draw_events, backend) = test_backend_factory(60, 50);
     let os_input = os_input_output(network_frames, 2);
     let opts = Opt {
-        interface: Some(String::from("interface_name")),
-        raw: false,
-        no_resolve: false,
-        show_dns: false,
-        dns_server: None,
         render_opts: RenderOpts {
             addresses: true,
             connections: true,
-            processes: false,
-            total_utilization: false,
+            ..Default::default()
         },
+        ..opts_ui()
     };
-
     start(backend, os_input, opts);
-    let terminal_draw_events_mirror = terminal_draw_events.lock().unwrap();
-    assert_snapshot!(&terminal_draw_events_mirror[0]);
+
+    assert_snapshot!(terminal_draw_events
+        .lock()
+        .unwrap()
+        .join(SNAPSHOT_SECTION_SEPARATOR));
 }
 
 #[test]
@@ -383,22 +321,19 @@ fn two_windows_split_vertically() {
     let (_, terminal_draw_events, backend) = test_backend_factory(190, 50);
     let os_input = os_input_output(network_frames, 1);
     let opts = Opt {
-        interface: Some(String::from("interface_name")),
-        raw: false,
-        no_resolve: false,
-        show_dns: false,
-        dns_server: None,
         render_opts: RenderOpts {
             addresses: true,
             connections: true,
-            processes: false,
-            total_utilization: false,
+            ..Default::default()
         },
+        ..opts_ui()
     };
-
     start(backend, os_input, opts);
-    let terminal_draw_events_mirror = terminal_draw_events.lock().unwrap();
-    assert_snapshot!(&terminal_draw_events_mirror[0]);
+
+    assert_snapshot!(terminal_draw_events
+        .lock()
+        .unwrap()
+        .join(SNAPSHOT_SECTION_SEPARATOR));
 }
 
 #[test]
@@ -414,42 +349,26 @@ fn one_packet_of_traffic() {
     let os_input = os_input_output(network_frames, 2);
     let opts = opts_ui();
     start(backend, os_input, opts);
-    let terminal_draw_events_mirror = terminal_draw_events.lock().unwrap();
 
-    let expected_terminal_events = vec![
-        Clear, HideCursor, Draw, HideCursor, Flush, Draw, HideCursor, Flush, Clear, ShowCursor,
-    ];
-    assert_eq!(
-        &terminal_events.lock().unwrap()[..],
-        &expected_terminal_events[..]
-    );
-
-    assert_eq!(terminal_draw_events_mirror.len(), 2);
-    assert_snapshot!(&terminal_draw_events_mirror[0]);
-    assert_snapshot!(&terminal_draw_events_mirror[1]);
+    assert_snapshot!(terminal_draw_events
+        .lock()
+        .unwrap()
+        .join(SNAPSHOT_SECTION_SEPARATOR));
+    assert_debug_snapshot!(terminal_events.lock().unwrap().as_slice());
 }
 
-#[test]
-fn bi_directional_traffic() {
-    let network_frames = sample_frames();
-
+#[rstest(sample_frames_short as frames)]
+fn bi_directional_traffic(frames: Vec<Box<dyn DataLinkReceiver>>) {
     let (terminal_events, terminal_draw_events, backend) = test_backend_factory(190, 50);
-    let os_input = os_input_output(network_frames, 2);
+    let os_input = os_input_output(frames, 2);
     let opts = opts_ui();
     start(backend, os_input, opts);
-    let terminal_draw_events_mirror = terminal_draw_events.lock().unwrap();
 
-    let expected_terminal_events = vec![
-        Clear, HideCursor, Draw, HideCursor, Flush, Draw, HideCursor, Flush, Clear, ShowCursor,
-    ];
-    assert_eq!(
-        &terminal_events.lock().unwrap()[..],
-        &expected_terminal_events[..]
-    );
-
-    assert_eq!(terminal_draw_events_mirror.len(), 2);
-    assert_snapshot!(&terminal_draw_events_mirror[0]);
-    assert_snapshot!(&terminal_draw_events_mirror[1]);
+    assert_snapshot!(terminal_draw_events
+        .lock()
+        .unwrap()
+        .join(SNAPSHOT_SECTION_SEPARATOR));
+    assert_debug_snapshot!(terminal_events.lock().unwrap().as_slice());
 }
 
 #[test]
@@ -475,19 +394,12 @@ fn multiple_packets_of_traffic_from_different_connections() {
     let os_input = os_input_output(network_frames, 2);
     let opts = opts_ui();
     start(backend, os_input, opts);
-    let terminal_draw_events_mirror = terminal_draw_events.lock().unwrap();
 
-    let expected_terminal_events = vec![
-        Clear, HideCursor, Draw, HideCursor, Flush, Draw, HideCursor, Flush, Clear, ShowCursor,
-    ];
-    assert_eq!(
-        &terminal_events.lock().unwrap()[..],
-        &expected_terminal_events[..]
-    );
-
-    assert_eq!(terminal_draw_events_mirror.len(), 2);
-    assert_snapshot!(&terminal_draw_events_mirror[0]);
-    assert_snapshot!(&terminal_draw_events_mirror[1]);
+    assert_snapshot!(terminal_draw_events
+        .lock()
+        .unwrap()
+        .join(SNAPSHOT_SECTION_SEPARATOR));
+    assert_debug_snapshot!(terminal_events.lock().unwrap().as_slice());
 }
 
 #[test]
@@ -513,19 +425,12 @@ fn multiple_packets_of_traffic_from_single_connection() {
     let os_input = os_input_output(network_frames, 2);
     let opts = opts_ui();
     start(backend, os_input, opts);
-    let terminal_draw_events_mirror = terminal_draw_events.lock().unwrap();
 
-    let expected_terminal_events = vec![
-        Clear, HideCursor, Draw, HideCursor, Flush, Draw, HideCursor, Flush, Clear, ShowCursor,
-    ];
-    assert_eq!(
-        &terminal_events.lock().unwrap()[..],
-        &expected_terminal_events[..]
-    );
-
-    assert_eq!(terminal_draw_events_mirror.len(), 2);
-    assert_snapshot!(&terminal_draw_events_mirror[0]);
-    assert_snapshot!(&terminal_draw_events_mirror[1]);
+    assert_snapshot!(terminal_draw_events
+        .lock()
+        .unwrap()
+        .join(SNAPSHOT_SECTION_SEPARATOR));
+    assert_debug_snapshot!(terminal_events.lock().unwrap().as_slice());
 }
 
 #[test]
@@ -551,19 +456,12 @@ fn one_process_with_multiple_connections() {
     let os_input = os_input_output(network_frames, 2);
     let opts = opts_ui();
     start(backend, os_input, opts);
-    let terminal_draw_events_mirror = terminal_draw_events.lock().unwrap();
 
-    let expected_terminal_events = vec![
-        Clear, HideCursor, Draw, HideCursor, Flush, Draw, HideCursor, Flush, Clear, ShowCursor,
-    ];
-    assert_eq!(
-        &terminal_events.lock().unwrap()[..],
-        &expected_terminal_events[..]
-    );
-
-    assert_eq!(terminal_draw_events_mirror.len(), 2);
-    assert_snapshot!(&terminal_draw_events_mirror[0]);
-    assert_snapshot!(&terminal_draw_events_mirror[1]);
+    assert_snapshot!(terminal_draw_events
+        .lock()
+        .unwrap()
+        .join(SNAPSHOT_SECTION_SEPARATOR));
+    assert_debug_snapshot!(terminal_events.lock().unwrap().as_slice());
 }
 
 #[test]
@@ -603,19 +501,12 @@ fn multiple_processes_with_multiple_connections() {
     let os_input = os_input_output(network_frames, 2);
     let opts = opts_ui();
     start(backend, os_input, opts);
-    let terminal_draw_events_mirror = terminal_draw_events.lock().unwrap();
 
-    let expected_terminal_events = vec![
-        Clear, HideCursor, Draw, HideCursor, Flush, Draw, HideCursor, Flush, Clear, ShowCursor,
-    ];
-    assert_eq!(
-        &terminal_events.lock().unwrap()[..],
-        &expected_terminal_events[..]
-    );
-
-    assert_eq!(terminal_draw_events_mirror.len(), 2);
-    assert_snapshot!(&terminal_draw_events_mirror[0]);
-    assert_snapshot!(&terminal_draw_events_mirror[1]);
+    assert_snapshot!(terminal_draw_events
+        .lock()
+        .unwrap()
+        .join(SNAPSHOT_SECTION_SEPARATOR));
+    assert_debug_snapshot!(terminal_events.lock().unwrap().as_slice());
 }
 
 #[test]
@@ -641,445 +532,116 @@ fn multiple_connections_from_remote_address() {
     let os_input = os_input_output(network_frames, 2);
     let opts = opts_ui();
     start(backend, os_input, opts);
-    let terminal_draw_events_mirror = terminal_draw_events.lock().unwrap();
 
-    let expected_terminal_events = vec![
-        Clear, HideCursor, Draw, HideCursor, Flush, Draw, HideCursor, Flush, Clear, ShowCursor,
-    ];
-    assert_eq!(
-        &terminal_events.lock().unwrap()[..],
-        &expected_terminal_events[..]
-    );
-
-    assert_eq!(terminal_draw_events_mirror.len(), 2);
-    assert_snapshot!(&terminal_draw_events_mirror[0]);
-    assert_snapshot!(&terminal_draw_events_mirror[1]);
+    assert_snapshot!(terminal_draw_events
+        .lock()
+        .unwrap()
+        .join(SNAPSHOT_SECTION_SEPARATOR));
+    assert_debug_snapshot!(terminal_events.lock().unwrap().as_slice());
 }
 
-#[test]
-fn sustained_traffic_from_one_process() {
-    let network_frames = vec![NetworkFrames::new(vec![
-        Some(build_tcp_packet(
-            "1.1.1.1",
-            "10.0.0.2",
-            12345,
-            443,
-            b"I have come from 1.1.1.1",
-        )),
-        None, // sleep
-        Some(build_tcp_packet(
-            "1.1.1.1",
-            "10.0.0.2",
-            12345,
-            443,
-            b"Same here, but one second later",
-        )),
-    ]) as Box<dyn DataLinkReceiver>];
-
+#[rstest(sample_frames_sustained_one_process as frames)]
+fn sustained_traffic_from_one_process(frames: Vec<Box<dyn DataLinkReceiver>>) {
     let (terminal_events, terminal_draw_events, backend) = test_backend_factory(190, 50);
 
-    let os_input = os_input_output(network_frames, 3);
+    let os_input = os_input_output(frames, 3);
     let opts = opts_ui();
     start(backend, os_input, opts);
-    let terminal_draw_events_mirror = terminal_draw_events.lock().unwrap();
 
-    let expected_terminal_events = vec![
-        Clear, HideCursor, Draw, HideCursor, Flush, Draw, HideCursor, Flush, Draw, HideCursor,
-        Flush, Clear, ShowCursor,
-    ];
-    assert_eq!(
-        &terminal_events.lock().unwrap()[..],
-        &expected_terminal_events[..]
-    );
-
-    assert_eq!(terminal_draw_events_mirror.len(), 3);
-    assert_snapshot!(&terminal_draw_events_mirror[1]);
-    assert_snapshot!(&terminal_draw_events_mirror[2]);
+    assert_snapshot!(terminal_draw_events
+        .lock()
+        .unwrap()
+        .join(SNAPSHOT_SECTION_SEPARATOR));
+    assert_debug_snapshot!(terminal_events.lock().unwrap().as_slice());
 }
 
-#[test]
-fn sustained_traffic_from_one_process_total() {
-    let network_frames = vec![NetworkFrames::new(vec![
-        Some(build_tcp_packet(
-            "1.1.1.1",
-            "10.0.0.2",
-            12345,
-            443,
-            b"I have come from 1.1.1.1",
-        )),
-        None, // sleep
-        Some(build_tcp_packet(
-            "1.1.1.1",
-            "10.0.0.2",
-            12345,
-            443,
-            b"Same here, but one second later",
-        )),
-    ]) as Box<dyn DataLinkReceiver>];
-
+#[rstest(sample_frames_sustained_one_process as frames)]
+fn sustained_traffic_from_one_process_total(frames: Vec<Box<dyn DataLinkReceiver>>) {
     let (terminal_events, terminal_draw_events, backend) = test_backend_factory(190, 50);
 
-    let os_input = os_input_output(network_frames, 3);
+    let os_input = os_input_output(frames, 3);
     let mut opts = opts_ui();
     opts.render_opts.total_utilization = true;
     start(backend, os_input, opts);
-    let terminal_draw_events_mirror = terminal_draw_events.lock().unwrap();
 
-    let expected_terminal_events = vec![
-        Clear, HideCursor, Draw, HideCursor, Flush, Draw, HideCursor, Flush, Draw, HideCursor,
-        Flush, Clear, ShowCursor,
-    ];
-    assert_eq!(
-        &terminal_events.lock().unwrap()[..],
-        &expected_terminal_events[..]
-    );
-
-    assert_eq!(terminal_draw_events_mirror.len(), 3);
-    assert_snapshot!(&terminal_draw_events_mirror[1]);
-    assert_snapshot!(&terminal_draw_events_mirror[2].replace("1 \n", "2 \n"));
+    assert_snapshot!(terminal_draw_events
+        .lock()
+        .unwrap()
+        .join(SNAPSHOT_SECTION_SEPARATOR));
+    assert_debug_snapshot!(terminal_events.lock().unwrap().as_slice());
 }
 
-#[test]
-fn sustained_traffic_from_multiple_processes() {
-    let network_frames = vec![NetworkFrames::new(vec![
-        Some(build_tcp_packet(
-            "1.1.1.1",
-            "10.0.0.2",
-            12345,
-            443,
-            b"I have come from 1.1.1.1",
-        )),
-        Some(build_tcp_packet(
-            "3.3.3.3",
-            "10.0.0.2",
-            1337,
-            4435,
-            b"I come from 3.3.3.3",
-        )),
-        None, // sleep
-        Some(build_tcp_packet(
-            "1.1.1.1",
-            "10.0.0.2",
-            12345,
-            443,
-            b"I have come from 1.1.1.1 one second later",
-        )),
-        Some(build_tcp_packet(
-            "3.3.3.3",
-            "10.0.0.2",
-            1337,
-            4435,
-            b"I come 3.3.3.3 one second later",
-        )),
-    ]) as Box<dyn DataLinkReceiver>];
-
+#[rstest(sample_frames_sustained_multiple_processes as frames)]
+fn sustained_traffic_from_multiple_processes(frames: Vec<Box<dyn DataLinkReceiver>>) {
     let (terminal_events, terminal_draw_events, backend) = test_backend_factory(190, 50);
 
-    let os_input = os_input_output(network_frames, 3);
+    let os_input = os_input_output(frames, 3);
     let opts = opts_ui();
     start(backend, os_input, opts);
-    let terminal_draw_events_mirror = terminal_draw_events.lock().unwrap();
 
-    let expected_terminal_events = vec![
-        Clear, HideCursor, Draw, HideCursor, Flush, Draw, HideCursor, Flush, Draw, HideCursor,
-        Flush, Clear, ShowCursor,
-    ];
-    assert_eq!(
-        &terminal_events.lock().unwrap()[..],
-        &expected_terminal_events[..]
-    );
-
-    assert_eq!(terminal_draw_events_mirror.len(), 3);
-    assert_snapshot!(&terminal_draw_events_mirror[1]);
-    assert_snapshot!(&terminal_draw_events_mirror[2]);
+    assert_snapshot!(terminal_draw_events
+        .lock()
+        .unwrap()
+        .join(SNAPSHOT_SECTION_SEPARATOR));
+    assert_debug_snapshot!(terminal_events.lock().unwrap().as_slice());
 }
 
-#[test]
-fn sustained_traffic_from_multiple_processes_total() {
-    let network_frames = vec![NetworkFrames::new(vec![
-        Some(build_tcp_packet(
-            "1.1.1.1",
-            "10.0.0.2",
-            12345,
-            443,
-            b"I have come from 1.1.1.1",
-        )),
-        Some(build_tcp_packet(
-            "3.3.3.3",
-            "10.0.0.2",
-            1337,
-            4435,
-            b"I come from 3.3.3.3",
-        )),
-        None, // sleep
-        Some(build_tcp_packet(
-            "1.1.1.1",
-            "10.0.0.2",
-            12345,
-            443,
-            b"I have come from 1.1.1.1 one second later",
-        )),
-        Some(build_tcp_packet(
-            "3.3.3.3",
-            "10.0.0.2",
-            1337,
-            4435,
-            b"I come 3.3.3.3 one second later",
-        )),
-    ]) as Box<dyn DataLinkReceiver>];
-
+#[rstest(sample_frames_sustained_multiple_processes as frames)]
+fn sustained_traffic_from_multiple_processes_total(frames: Vec<Box<dyn DataLinkReceiver>>) {
     let (terminal_events, terminal_draw_events, backend) = test_backend_factory(190, 50);
 
-    let os_input = os_input_output(network_frames, 3);
+    let os_input = os_input_output(frames, 3);
     let mut opts = opts_ui();
     opts.render_opts.total_utilization = true;
     start(backend, os_input, opts);
-    let terminal_draw_events_mirror = terminal_draw_events.lock().unwrap();
 
-    let expected_terminal_events = vec![
-        Clear, HideCursor, Draw, HideCursor, Flush, Draw, HideCursor, Flush, Draw, HideCursor,
-        Flush, Clear, ShowCursor,
-    ];
-    assert_eq!(
-        &terminal_events.lock().unwrap()[..],
-        &expected_terminal_events[..]
-    );
-
-    assert_eq!(terminal_draw_events_mirror.len(), 3);
-    assert_snapshot!(&terminal_draw_events_mirror[1]);
-    assert_snapshot!(&terminal_draw_events_mirror[2].replace("1 \n", "2 \n"));
+    assert_snapshot!(terminal_draw_events
+        .lock()
+        .unwrap()
+        .join(SNAPSHOT_SECTION_SEPARATOR));
+    assert_debug_snapshot!(terminal_events.lock().unwrap().as_slice());
 }
 
-#[test]
-fn sustained_traffic_from_multiple_processes_bi_directional() {
-    let network_frames = vec![NetworkFrames::new(vec![
-        Some(build_tcp_packet(
-            "10.0.0.2",
-            "3.3.3.3",
-            4435,
-            1337,
-            b"omw to 3.3.3.3",
-        )),
-        Some(build_tcp_packet(
-            "3.3.3.3",
-            "10.0.0.2",
-            1337,
-            4435,
-            b"I was just there!",
-        )),
-        Some(build_tcp_packet(
-            "1.1.1.1",
-            "10.0.0.2",
-            12345,
-            443,
-            b"Is it nice there? I think 1.1.1.1 is dull",
-        )),
-        Some(build_tcp_packet(
-            "10.0.0.2",
-            "1.1.1.1",
-            443,
-            12345,
-            b"Well, I heard 1.1.1.1 is all the rage",
-        )),
-        None, // sleep
-        Some(build_tcp_packet(
-            "10.0.0.2",
-            "3.3.3.3",
-            4435,
-            1337,
-            b"Wait for me!",
-        )),
-        Some(build_tcp_packet(
-            "3.3.3.3",
-            "10.0.0.2",
-            1337,
-            4435,
-            b"They're waiting for you...",
-        )),
-        Some(build_tcp_packet(
-            "1.1.1.1",
-            "10.0.0.2",
-            12345,
-            443,
-            b"1.1.1.1 forever!",
-        )),
-        Some(build_tcp_packet(
-            "10.0.0.2",
-            "1.1.1.1",
-            443,
-            12345,
-            b"10.0.0.2 forever!",
-        )),
-    ]) as Box<dyn DataLinkReceiver>];
-
+#[rstest(sample_frames_sustained_long as frames)]
+fn sustained_traffic_from_multiple_processes_bi_directional(
+    frames: Vec<Box<dyn DataLinkReceiver>>,
+) {
     let (terminal_events, terminal_draw_events, backend) = test_backend_factory(190, 50);
 
-    let os_input = os_input_output(network_frames, 3);
+    let os_input = os_input_output(frames, 3);
     let opts = opts_ui();
     start(backend, os_input, opts);
-    let terminal_draw_events_mirror = terminal_draw_events.lock().unwrap();
 
-    let expected_terminal_events = vec![
-        Clear, HideCursor, Draw, HideCursor, Flush, Draw, HideCursor, Flush, Draw, HideCursor,
-        Flush, Clear, ShowCursor,
-    ];
-    assert_eq!(
-        &terminal_events.lock().unwrap()[..],
-        &expected_terminal_events[..]
-    );
-
-    assert_eq!(terminal_draw_events_mirror.len(), 3);
-    assert_snapshot!(&terminal_draw_events_mirror[1]);
-    assert_snapshot!(&terminal_draw_events_mirror[2]);
+    assert_snapshot!(terminal_draw_events
+        .lock()
+        .unwrap()
+        .join(SNAPSHOT_SECTION_SEPARATOR));
+    assert_debug_snapshot!(terminal_events.lock().unwrap().as_slice());
 }
 
-#[test]
-fn sustained_traffic_from_multiple_processes_bi_directional_total() {
-    let network_frames = vec![NetworkFrames::new(vec![
-        Some(build_tcp_packet(
-            "10.0.0.2",
-            "3.3.3.3",
-            4435,
-            1337,
-            b"omw to 3.3.3.3",
-        )),
-        Some(build_tcp_packet(
-            "3.3.3.3",
-            "10.0.0.2",
-            1337,
-            4435,
-            b"I was just there!",
-        )),
-        Some(build_tcp_packet(
-            "1.1.1.1",
-            "10.0.0.2",
-            12345,
-            443,
-            b"Is it nice there? I think 1.1.1.1 is dull",
-        )),
-        Some(build_tcp_packet(
-            "10.0.0.2",
-            "1.1.1.1",
-            443,
-            12345,
-            b"Well, I heard 1.1.1.1 is all the rage",
-        )),
-        None, // sleep
-        Some(build_tcp_packet(
-            "10.0.0.2",
-            "3.3.3.3",
-            4435,
-            1337,
-            b"Wait for me!",
-        )),
-        Some(build_tcp_packet(
-            "3.3.3.3",
-            "10.0.0.2",
-            1337,
-            4435,
-            b"They're waiting for you...",
-        )),
-        Some(build_tcp_packet(
-            "1.1.1.1",
-            "10.0.0.2",
-            12345,
-            443,
-            b"1.1.1.1 forever!",
-        )),
-        Some(build_tcp_packet(
-            "10.0.0.2",
-            "1.1.1.1",
-            443,
-            12345,
-            b"10.0.0.2 forever!",
-        )),
-    ]) as Box<dyn DataLinkReceiver>];
-
+#[rstest(sample_frames_sustained_long as frames)]
+fn sustained_traffic_from_multiple_processes_bi_directional_total(
+    frames: Vec<Box<dyn DataLinkReceiver>>,
+) {
     let (terminal_events, terminal_draw_events, backend) = test_backend_factory(190, 50);
 
-    let os_input = os_input_output(network_frames, 3);
+    let os_input = os_input_output(frames, 3);
     let mut opts = opts_ui();
     opts.render_opts.total_utilization = true;
     start(backend, os_input, opts);
-    let terminal_draw_events_mirror = terminal_draw_events.lock().unwrap();
 
-    let expected_terminal_events = vec![
-        Clear, HideCursor, Draw, HideCursor, Flush, Draw, HideCursor, Flush, Draw, HideCursor,
-        Flush, Clear, ShowCursor,
-    ];
-    assert_eq!(
-        &terminal_events.lock().unwrap()[..],
-        &expected_terminal_events[..]
-    );
-
-    assert_eq!(terminal_draw_events_mirror.len(), 3);
-    assert_snapshot!(&terminal_draw_events_mirror[1]);
-    assert_snapshot!(&terminal_draw_events_mirror[2].replace("1 \n", "2 \n"));
+    assert_snapshot!(terminal_draw_events
+        .lock()
+        .unwrap()
+        .join(SNAPSHOT_SECTION_SEPARATOR));
+    assert_debug_snapshot!(terminal_events.lock().unwrap().as_slice());
 }
 
-#[test]
-fn traffic_with_host_names() {
-    let network_frames = vec![NetworkFrames::new(vec![
-        Some(build_tcp_packet(
-            "10.0.0.2",
-            "3.3.3.3",
-            4435,
-            1337,
-            b"omw to 3.3.3.3",
-        )),
-        Some(build_tcp_packet(
-            "3.3.3.3",
-            "10.0.0.2",
-            1337,
-            4435,
-            b"I was just there!",
-        )),
-        Some(build_tcp_packet(
-            "1.1.1.1",
-            "10.0.0.2",
-            12345,
-            443,
-            b"Is it nice there? I think 1.1.1.1 is dull",
-        )),
-        Some(build_tcp_packet(
-            "10.0.0.2",
-            "1.1.1.1",
-            443,
-            12345,
-            b"Well, I heard 1.1.1.1 is all the rage",
-        )),
-        None, // sleep
-        Some(build_tcp_packet(
-            "10.0.0.2",
-            "3.3.3.3",
-            4435,
-            1337,
-            b"Wait for me!",
-        )),
-        Some(build_tcp_packet(
-            "3.3.3.3",
-            "10.0.0.2",
-            1337,
-            4435,
-            b"They're waiting for you...",
-        )),
-        Some(build_tcp_packet(
-            "1.1.1.1",
-            "10.0.0.2",
-            12345,
-            443,
-            b"1.1.1.1 forever!",
-        )),
-        Some(build_tcp_packet(
-            "10.0.0.2",
-            "1.1.1.1",
-            443,
-            12345,
-            b"10.0.0.2 forever!",
-        )),
-    ]) as Box<dyn DataLinkReceiver>];
-
+#[rstest(sample_frames_sustained_long as network_frames)]
+fn traffic_with_host_names(network_frames: Vec<Box<dyn DataLinkReceiver>>) {
     let (terminal_events, terminal_draw_events, backend) = test_backend_factory(190, 50);
+
+    let interfaces_with_frames = get_interfaces_with_frames(network_frames);
 
     let mut ips_to_hostnames = HashMap::new();
     ips_to_hostnames.insert(
@@ -1095,11 +657,10 @@ fn traffic_with_host_names() {
         String::from("i-like-cheese.com"),
     );
     let dns_client = create_fake_dns_client(ips_to_hostnames);
-    let write_to_stdout = Box::new(move |_output: String| {});
+    let write_to_stdout = Box::new(|_output: &_| {});
 
     let os_input = OsInputOutput {
-        network_interfaces: get_interfaces(),
-        network_frames,
+        interfaces_with_frames,
         get_open_sockets,
         terminal_events: sleep_and_quit_events(3),
         dns_client,
@@ -1107,85 +668,19 @@ fn traffic_with_host_names() {
     };
     let opts = opts_ui();
     start(backend, os_input, opts);
-    let terminal_draw_events_mirror = terminal_draw_events.lock().unwrap();
 
-    let expected_terminal_events = vec![
-        Clear, HideCursor, Draw, HideCursor, Flush, Draw, HideCursor, Flush, Draw, HideCursor,
-        Flush, Clear, ShowCursor,
-    ];
-    assert_eq!(
-        &terminal_events.lock().unwrap()[..],
-        &expected_terminal_events[..]
-    );
-
-    assert_eq!(terminal_draw_events_mirror.len(), 3);
-    assert_snapshot!(&terminal_draw_events_mirror[1]);
-    assert_snapshot!(&terminal_draw_events_mirror[2]);
+    assert_snapshot!(terminal_draw_events
+        .lock()
+        .unwrap()
+        .join(SNAPSHOT_SECTION_SEPARATOR));
+    assert_debug_snapshot!(terminal_events.lock().unwrap().as_slice());
 }
 
-#[test]
-fn truncate_long_hostnames() {
-    let network_frames = vec![NetworkFrames::new(vec![
-        Some(build_tcp_packet(
-            "10.0.0.2",
-            "3.3.3.3",
-            4435,
-            1337,
-            b"omw to 3.3.3.3",
-        )),
-        Some(build_tcp_packet(
-            "3.3.3.3",
-            "10.0.0.2",
-            1337,
-            4435,
-            b"I was just there!",
-        )),
-        Some(build_tcp_packet(
-            "1.1.1.1",
-            "10.0.0.2",
-            12345,
-            443,
-            b"Is it nice there? I think 1.1.1.1 is dull",
-        )),
-        Some(build_tcp_packet(
-            "10.0.0.2",
-            "1.1.1.1",
-            443,
-            12345,
-            b"Well, I heard 1.1.1.1 is all the rage",
-        )),
-        None, // sleep
-        Some(build_tcp_packet(
-            "10.0.0.2",
-            "3.3.3.3",
-            4435,
-            1337,
-            b"Wait for me!",
-        )),
-        Some(build_tcp_packet(
-            "3.3.3.3",
-            "10.0.0.2",
-            1337,
-            4435,
-            b"They're waiting for you...",
-        )),
-        Some(build_tcp_packet(
-            "1.1.1.1",
-            "10.0.0.2",
-            12345,
-            443,
-            b"1.1.1.1 forever!",
-        )),
-        Some(build_tcp_packet(
-            "10.0.0.2",
-            "1.1.1.1",
-            443,
-            12345,
-            b"10.0.0.2 forever!",
-        )),
-    ]) as Box<dyn DataLinkReceiver>];
-
+#[rstest(sample_frames_sustained_long as network_frames)]
+fn truncate_long_hostnames(network_frames: Vec<Box<dyn DataLinkReceiver>>) {
     let (terminal_events, terminal_draw_events, backend) = test_backend_factory(190, 50);
+
+    let interfaces_with_frames = get_interfaces_with_frames(network_frames);
 
     let mut ips_to_hostnames = HashMap::new();
     ips_to_hostnames.insert(
@@ -1201,11 +696,10 @@ fn truncate_long_hostnames() {
         String::from("i-like-cheese.com"),
     );
     let dns_client = create_fake_dns_client(ips_to_hostnames);
-    let write_to_stdout = Box::new(move |_output: String| {});
+    let write_to_stdout = Box::new(|_output: &_| {});
 
     let os_input = OsInputOutput {
-        network_interfaces: get_interfaces(),
-        network_frames,
+        interfaces_with_frames,
         get_open_sockets,
         terminal_events: sleep_and_quit_events(3),
         dns_client,
@@ -1213,84 +707,19 @@ fn truncate_long_hostnames() {
     };
     let opts = opts_ui();
     start(backend, os_input, opts);
-    let terminal_draw_events_mirror = terminal_draw_events.lock().unwrap();
 
-    let expected_terminal_events = vec![
-        Clear, HideCursor, Draw, HideCursor, Flush, Draw, HideCursor, Flush, Draw, HideCursor,
-        Flush, Clear, ShowCursor,
-    ];
-    assert_eq!(
-        &terminal_events.lock().unwrap()[..],
-        &expected_terminal_events[..]
-    );
-
-    assert_eq!(terminal_draw_events_mirror.len(), 3);
-    assert_snapshot!(&terminal_draw_events_mirror[1]);
-    assert_snapshot!(&terminal_draw_events_mirror[2]);
+    assert_snapshot!(terminal_draw_events
+        .lock()
+        .unwrap()
+        .join(SNAPSHOT_SECTION_SEPARATOR));
+    assert_debug_snapshot!(terminal_events.lock().unwrap().as_slice());
 }
 
-#[test]
-fn no_resolve_mode() {
-    let network_frames = vec![NetworkFrames::new(vec![
-        Some(build_tcp_packet(
-            "10.0.0.2",
-            "3.3.3.3",
-            4435,
-            1337,
-            b"omw to 3.3.3.3",
-        )),
-        Some(build_tcp_packet(
-            "3.3.3.3",
-            "10.0.0.2",
-            1337,
-            4435,
-            b"I was just there!",
-        )),
-        Some(build_tcp_packet(
-            "1.1.1.1",
-            "10.0.0.2",
-            12345,
-            443,
-            b"Is it nice there? I think 1.1.1.1 is dull",
-        )),
-        Some(build_tcp_packet(
-            "10.0.0.2",
-            "1.1.1.1",
-            443,
-            12345,
-            b"Well, I heard 1.1.1.1 is all the rage",
-        )),
-        None, // sleep
-        Some(build_tcp_packet(
-            "10.0.0.2",
-            "3.3.3.3",
-            4435,
-            1337,
-            b"Wait for me!",
-        )),
-        Some(build_tcp_packet(
-            "3.3.3.3",
-            "10.0.0.2",
-            1337,
-            4435,
-            b"They're waiting for you...",
-        )),
-        Some(build_tcp_packet(
-            "1.1.1.1",
-            "10.0.0.2",
-            12345,
-            443,
-            b"1.1.1.1 forever!",
-        )),
-        Some(build_tcp_packet(
-            "10.0.0.2",
-            "1.1.1.1",
-            443,
-            12345,
-            b"10.0.0.2 forever!",
-        )),
-    ]) as Box<dyn DataLinkReceiver>];
+#[rstest(sample_frames_sustained_long as network_frames)]
+fn no_resolve_mode(network_frames: Vec<Box<dyn DataLinkReceiver>>) {
     let (terminal_events, terminal_draw_events, backend) = test_backend_factory(190, 50);
+
+    let interfaces_with_frames = get_interfaces_with_frames(network_frames);
 
     let mut ips_to_hostnames = HashMap::new();
     ips_to_hostnames.insert(
@@ -1306,11 +735,10 @@ fn no_resolve_mode() {
         String::from("i-like-cheese.com"),
     );
     let dns_client = None;
-    let write_to_stdout = Box::new(move |_output: String| {});
+    let write_to_stdout = Box::new(|_output: &_| {});
 
     let os_input = OsInputOutput {
-        network_interfaces: get_interfaces(),
-        network_frames,
+        interfaces_with_frames,
         get_open_sockets,
         terminal_events: sleep_and_quit_events(3),
         dns_client,
@@ -1318,20 +746,12 @@ fn no_resolve_mode() {
     };
     let opts = opts_ui();
     start(backend, os_input, opts);
-    let terminal_draw_events_mirror = terminal_draw_events.lock().unwrap();
 
-    let expected_terminal_events = vec![
-        Clear, HideCursor, Draw, HideCursor, Flush, Draw, HideCursor, Flush, Draw, HideCursor,
-        Flush, Clear, ShowCursor,
-    ];
-    assert_eq!(
-        &terminal_events.lock().unwrap()[..],
-        &expected_terminal_events[..]
-    );
-
-    assert_eq!(terminal_draw_events_mirror.len(), 3);
-    assert_snapshot!(&terminal_draw_events_mirror[1]);
-    assert_snapshot!(&terminal_draw_events_mirror[2]);
+    assert_snapshot!(terminal_draw_events
+        .lock()
+        .unwrap()
+        .join(SNAPSHOT_SECTION_SEPARATOR));
+    assert_debug_snapshot!(terminal_events.lock().unwrap().as_slice());
 }
 
 #[test]
@@ -1343,15 +763,15 @@ fn traffic_with_winch_event() {
         12345,
         b"I am a fake tcp packet",
     ))]) as Box<dyn DataLinkReceiver>];
+    let interfaces_with_frames = get_interfaces_with_frames(network_frames);
 
     let (terminal_events, terminal_draw_events, backend) = test_backend_factory(190, 50);
 
     let dns_client = create_fake_dns_client(HashMap::new());
-    let write_to_stdout = Box::new(move |_output: String| {});
+    let write_to_stdout = Box::new(|_output: &_| {});
 
     let os_input = OsInputOutput {
-        network_interfaces: get_interfaces(),
-        network_frames,
+        interfaces_with_frames,
         get_open_sockets,
         terminal_events: sleep_resize_and_quit_events(2),
         dns_client,
@@ -1359,25 +779,21 @@ fn traffic_with_winch_event() {
     };
     let opts = opts_ui();
     start(backend, os_input, opts);
-    let terminal_draw_events_mirror = terminal_draw_events.lock().unwrap();
 
-    let expected_terminal_events = vec![
-        Clear, HideCursor, Draw, HideCursor, Flush, Draw, HideCursor, Flush, Draw, HideCursor,
-        Flush, Clear, ShowCursor,
-    ];
-    assert_eq!(
-        &terminal_events.lock().unwrap()[..],
-        &expected_terminal_events[..]
-    );
-
-    assert_eq!(terminal_draw_events_mirror.len(), 3);
-    assert_snapshot!(&terminal_draw_events_mirror[0]);
-    assert_snapshot!(&terminal_draw_events_mirror[1]);
-    assert_snapshot!(&terminal_draw_events_mirror[2]);
+    assert_snapshot!(terminal_draw_events
+        .lock()
+        .unwrap()
+        .join(SNAPSHOT_SECTION_SEPARATOR));
+    assert_debug_snapshot!(terminal_events.lock().unwrap().as_slice());
 }
 
-#[test]
-fn layout_full_width_under_30_height() {
+#[rstest]
+#[case("full-width-under-30-height", 190, 29)]
+#[case("under-120-width-full-height", 119, 50)]
+#[case("under-120-width-under-30-height", 119, 29)]
+#[case("under-50-width-under-50-height", 50, 50)]
+#[case("under-70-width-under-30-height", 69, 29)]
+fn layout(#[case] name: &str, #[case] width: u16, #[case] height: u16) {
     let network_frames = vec![NetworkFrames::new(vec![
         Some(build_tcp_packet(
             "1.1.1.1",
@@ -1409,227 +825,21 @@ fn layout_full_width_under_30_height() {
         )),
     ]) as Box<dyn DataLinkReceiver>];
 
-    let (terminal_events, terminal_draw_events, backend) = test_backend_factory(190, 29);
+    let (terminal_events, terminal_draw_events, backend) = test_backend_factory(width, height);
 
     let os_input = os_input_output(network_frames, 2);
     let opts = opts_ui();
     start(backend, os_input, opts);
-    let terminal_draw_events_mirror = terminal_draw_events.lock().unwrap();
 
-    let expected_terminal_events = vec![
-        Clear, HideCursor, Draw, HideCursor, Flush, Draw, HideCursor, Flush, Clear, ShowCursor,
-    ];
-    assert_eq!(
-        &terminal_events.lock().unwrap()[..],
-        &expected_terminal_events[..]
+    assert_snapshot!(
+        format!("layout-{name}-draw_events"),
+        terminal_draw_events
+            .lock()
+            .unwrap()
+            .join(SNAPSHOT_SECTION_SEPARATOR)
     );
-
-    assert_eq!(terminal_draw_events_mirror.len(), 2);
-    assert_snapshot!(&terminal_draw_events_mirror[0]);
-    assert_snapshot!(&terminal_draw_events_mirror[1]);
-}
-
-#[test]
-fn layout_under_120_width_full_height() {
-    let network_frames = vec![NetworkFrames::new(vec![
-        Some(build_tcp_packet(
-            "1.1.1.1",
-            "10.0.0.2",
-            12345,
-            443,
-            b"I have come from 1.1.1.1",
-        )),
-        Some(build_tcp_packet(
-            "3.3.3.3",
-            "10.0.0.2",
-            1337,
-            4435,
-            b"Greetings traveller, I'm from 3.3.3.3",
-        )),
-        Some(build_tcp_packet(
-            "2.2.2.2",
-            "10.0.0.2",
-            54321,
-            4434,
-            b"You know, 2.2.2.2 is really nice!",
-        )),
-        Some(build_tcp_packet(
-            "4.4.4.4",
-            "10.0.0.2",
-            1337,
-            4432,
-            b"I'm partial to 4.4.4.4",
-        )),
-    ]) as Box<dyn DataLinkReceiver>];
-    let (terminal_events, terminal_draw_events, backend) = test_backend_factory(119, 50);
-
-    let os_input = os_input_output(network_frames, 2);
-    let opts = opts_ui();
-    start(backend, os_input, opts);
-    let terminal_draw_events_mirror = terminal_draw_events.lock().unwrap();
-
-    let expected_terminal_events = vec![
-        Clear, HideCursor, Draw, HideCursor, Flush, Draw, HideCursor, Flush, Clear, ShowCursor,
-    ];
-    assert_eq!(
-        &terminal_events.lock().unwrap()[..],
-        &expected_terminal_events[..]
+    assert_debug_snapshot!(
+        format!("layout-{name}-events"),
+        terminal_events.lock().unwrap().as_slice()
     );
-
-    assert_eq!(terminal_draw_events_mirror.len(), 2);
-    assert_snapshot!(&terminal_draw_events_mirror[0]);
-    assert_snapshot!(&terminal_draw_events_mirror[1]);
-}
-
-#[test]
-fn layout_under_120_width_under_30_height() {
-    let network_frames = vec![NetworkFrames::new(vec![
-        Some(build_tcp_packet(
-            "1.1.1.1",
-            "10.0.0.2",
-            12345,
-            443,
-            b"I have come from 1.1.1.1",
-        )),
-        Some(build_tcp_packet(
-            "3.3.3.3",
-            "10.0.0.2",
-            1337,
-            4435,
-            b"Greetings traveller, I'm from 3.3.3.3",
-        )),
-        Some(build_tcp_packet(
-            "2.2.2.2",
-            "10.0.0.2",
-            54321,
-            4434,
-            b"You know, 2.2.2.2 is really nice!",
-        )),
-        Some(build_tcp_packet(
-            "4.4.4.4",
-            "10.0.0.2",
-            1337,
-            4432,
-            b"I'm partial to 4.4.4.4",
-        )),
-    ]) as Box<dyn DataLinkReceiver>];
-    let (terminal_events, terminal_draw_events, backend) = test_backend_factory(119, 29);
-    let os_input = os_input_output(network_frames, 2);
-    let opts = opts_ui();
-    start(backend, os_input, opts);
-    let terminal_draw_events_mirror = terminal_draw_events.lock().unwrap();
-
-    let expected_terminal_events = vec![
-        Clear, HideCursor, Draw, HideCursor, Flush, Draw, HideCursor, Flush, Clear, ShowCursor,
-    ];
-    assert_eq!(
-        &terminal_events.lock().unwrap()[..],
-        &expected_terminal_events[..]
-    );
-
-    assert_eq!(terminal_draw_events_mirror.len(), 2);
-    assert_snapshot!(&terminal_draw_events_mirror[0]);
-    assert_snapshot!(&terminal_draw_events_mirror[1]);
-}
-
-#[test]
-fn layout_under_50_width_under_50_height() {
-    let network_frames = vec![NetworkFrames::new(vec![
-        Some(build_tcp_packet(
-            "1.1.1.1",
-            "10.0.0.2",
-            12345,
-            443,
-            b"I have come from 1.1.1.1",
-        )),
-        Some(build_tcp_packet(
-            "3.3.3.3",
-            "10.0.0.2",
-            1337,
-            4435,
-            b"Greetings traveller, I'm from 3.3.3.3",
-        )),
-        Some(build_tcp_packet(
-            "2.2.2.2",
-            "10.0.0.2",
-            54321,
-            4434,
-            b"You know, 2.2.2.2 is really nice!",
-        )),
-        Some(build_tcp_packet(
-            "4.4.4.4",
-            "10.0.0.2",
-            1337,
-            4432,
-            b"I'm partial to 4.4.4.4",
-        )),
-    ]) as Box<dyn DataLinkReceiver>];
-    let (terminal_events, terminal_draw_events, backend) = test_backend_factory(49, 49);
-    let os_input = os_input_output(network_frames, 2);
-    let opts = opts_ui();
-    start(backend, os_input, opts);
-    let terminal_draw_events_mirror = terminal_draw_events.lock().unwrap();
-
-    let expected_terminal_events = vec![
-        Clear, HideCursor, Draw, HideCursor, Flush, Draw, HideCursor, Flush, Clear, ShowCursor,
-    ];
-    assert_eq!(
-        &terminal_events.lock().unwrap()[..],
-        &expected_terminal_events[..]
-    );
-
-    assert_eq!(terminal_draw_events_mirror.len(), 2);
-    assert_snapshot!(&terminal_draw_events_mirror[0]);
-    assert_snapshot!(&terminal_draw_events_mirror[1]);
-}
-
-#[test]
-fn layout_under_70_width_under_30_height() {
-    let network_frames = vec![NetworkFrames::new(vec![
-        Some(build_tcp_packet(
-            "1.1.1.1",
-            "10.0.0.2",
-            12345,
-            443,
-            b"I have come from 1.1.1.1",
-        )),
-        Some(build_tcp_packet(
-            "3.3.3.3",
-            "10.0.0.2",
-            1337,
-            4435,
-            b"Greetings traveller, I'm from 3.3.3.3",
-        )),
-        Some(build_tcp_packet(
-            "2.2.2.2",
-            "10.0.0.2",
-            54321,
-            4434,
-            b"You know, 2.2.2.2 is really nice!",
-        )),
-        Some(build_tcp_packet(
-            "4.4.4.4",
-            "10.0.0.2",
-            1337,
-            4432,
-            b"I'm partial to 4.4.4.4",
-        )),
-    ]) as Box<dyn DataLinkReceiver>];
-    let (terminal_events, terminal_draw_events, backend) = test_backend_factory(69, 29);
-    let os_input = os_input_output(network_frames, 2);
-    let opts = opts_ui();
-    start(backend, os_input, opts);
-    let terminal_draw_events_mirror = terminal_draw_events.lock().unwrap();
-
-    let expected_terminal_events = vec![
-        Clear, HideCursor, Draw, HideCursor, Flush, Draw, HideCursor, Flush, Clear, ShowCursor,
-    ];
-    assert_eq!(
-        &terminal_events.lock().unwrap()[..],
-        &expected_terminal_events[..]
-    );
-
-    assert_eq!(terminal_draw_events_mirror.len(), 2);
-    assert_snapshot!(&terminal_draw_events_mirror[0]);
-    assert_snapshot!(&terminal_draw_events_mirror[1]);
 }

@@ -1,8 +1,8 @@
-use ::std::collections::HashMap;
-use ::std::fmt;
-use ::std::net::IpAddr;
-
-use ::std::net::SocketAddr;
+use std::{
+    collections::HashMap,
+    fmt,
+    net::{IpAddr, SocketAddr},
+};
 
 #[derive(PartialEq, Hash, Eq, Clone, PartialOrd, Ord, Debug, Copy)]
 pub enum Protocol {
@@ -11,10 +11,7 @@ pub enum Protocol {
 }
 
 impl Protocol {
-    // Currently, linux implementation doesn't use this function.
-    // Without this #[cfg] clippy complains about dead code, and CI refuses
-    // to pass.
-    #[cfg(any(target_os = "macos", target_os = "freebsd"))]
+    #[allow(dead_code)]
     pub fn from_str(string: &str) -> Option<Self> {
         match string {
             "TCP" => Some(Protocol::Tcp),
@@ -33,23 +30,53 @@ impl fmt::Display for Protocol {
     }
 }
 
-#[derive(Clone, Ord, PartialOrd, PartialEq, Eq, Hash, Debug, Copy)]
+#[derive(Clone, Ord, PartialOrd, PartialEq, Eq, Hash, Copy)]
 pub struct Socket {
     pub ip: IpAddr,
     pub port: u16,
 }
 
-#[derive(PartialEq, Hash, Eq, Clone, PartialOrd, Ord, Debug, Copy)]
+impl fmt::Debug for Socket {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Socket { ip, port } = self;
+        match ip {
+            IpAddr::V4(v4) => write!(f, "{v4}:{port}"),
+            IpAddr::V6(v6) => write!(f, "[{v6}]:{port}"),
+        }
+    }
+}
+
+#[derive(PartialEq, Hash, Eq, Clone, PartialOrd, Ord, Copy)]
 pub struct LocalSocket {
     pub ip: IpAddr,
     pub port: u16,
     pub protocol: Protocol,
 }
 
-#[derive(PartialEq, Hash, Eq, Clone, PartialOrd, Ord, Debug, Copy)]
+impl fmt::Debug for LocalSocket {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let LocalSocket { ip, port, protocol } = self;
+        match ip {
+            IpAddr::V4(v4) => write!(f, "{protocol}://{v4}:{port}"),
+            IpAddr::V6(v6) => write!(f, "{protocol}://[{v6}]:{port}"),
+        }
+    }
+}
+
+#[derive(PartialEq, Hash, Eq, Clone, PartialOrd, Ord, Copy)]
 pub struct Connection {
     pub remote_socket: Socket,
     pub local_socket: LocalSocket,
+}
+
+impl fmt::Debug for Connection {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Connection {
+            remote_socket,
+            local_socket,
+        } = self;
+        write!(f, "{local_socket:?} => {remote_socket:?}")
+    }
 }
 
 pub fn display_ip_or_host(ip: IpAddr, ip_to_host: &HashMap<IpAddr, String>) -> String {
@@ -65,8 +92,7 @@ pub fn display_connection_string(
     interface_name: &str,
 ) -> String {
     format!(
-        "<{}>:{} => {}:{} ({})",
-        interface_name,
+        "<{interface_name}>:{} => {}:{} ({})",
         connection.local_socket.port,
         display_ip_or_host(connection.remote_socket.ip, ip_to_host),
         connection.remote_socket.port,

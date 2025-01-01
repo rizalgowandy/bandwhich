@@ -1,14 +1,16 @@
-use crate::network::dns::{resolver::Lookup, IpTable};
 use std::{
     collections::HashSet,
     net::IpAddr,
     sync::{Arc, Mutex},
     thread::{Builder, JoinHandle},
 };
+
 use tokio::{
     runtime::Runtime,
     sync::mpsc::{self, Sender},
 };
+
+use crate::network::dns::{resolver::Lookup, IpTable};
 
 type PendingAddrs = HashSet<IpAddr>;
 
@@ -22,7 +24,7 @@ pub struct Client {
 }
 
 impl Client {
-    pub fn new<R>(resolver: R, mut runtime: Runtime) -> Result<Self, failure::Error>
+    pub fn new<R>(resolver: R, runtime: Runtime) -> eyre::Result<Self>
     where
         R: Lookup + Send + Sync + 'static,
     {

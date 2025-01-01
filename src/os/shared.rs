@@ -1,24 +1,39 @@
-use ::crossterm::event::read;
-use ::crossterm::event::Event;
-use ::pnet::datalink::Channel::Ethernet;
-use ::pnet::datalink::DataLinkReceiver;
-use ::pnet::datalink::{self, Config, NetworkInterface};
-use ::std::io::{self, ErrorKind, Write};
-use ::tokio::runtime::Runtime;
+use std::{
+    io::{self, ErrorKind, Write},
+    net::Ipv4Addr,
+    time,
+};
 
-use ::std::net::Ipv4Addr;
-use ::std::time;
+use crossterm::event::{read, Event};
+use eyre::{bail, eyre};
+use itertools::Itertools;
+use log::{debug, warn};
+use pnet::datalink::{self, Channel::Ethernet, Config, DataLinkReceiver, NetworkInterface};
+use tokio::runtime::Runtime;
 
-use crate::os::errors::GetInterfaceErrorKind;
+use crate::{network::dns, os::errors::GetInterfaceError, OsInputOutput};
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "android", target_os = "linux"))]
 use crate::os::linux::get_open_sockets;
 #[cfg(any(target_os = "macos", target_os = "freebsd"))]
 use crate::os::lsof::get_open_sockets;
 #[cfg(target_os = "windows")]
 use crate::os::windows::get_open_sockets;
 
-use crate::{network::dns, OsInputOutput};
+#[derive(Clone, Debug, Default, Hash, PartialEq, Eq)]
+pub struct ProcessInfo {
+    pub name: String,
+    pub pid: u32,
+}
+
+impl ProcessInfo {
+    pub fn new(name: &str, pid: u32) -> Self {
+        Self {
+            name: name.to_string(),
+            pid,
+        }
+    }
+}
 
 pub struct TerminalEvents;
 
@@ -34,7 +49,7 @@ impl Iterator for TerminalEvents {
 
 pub(crate) fn get_datalink_channel(
     interface: &NetworkInterface,
-) -> Result<Box<dyn DataLinkReceiver>, GetInterfaceErrorKind> {
+) -> Result<Box<dyn DataLinkReceiver>, GetInterfaceError> {
     let config = Config {
         read_timeout: Some(time::Duration::new(1, 0)),
         read_buffer_size: 65536,
@@ -43,17 +58,17 @@ pub(crate) fn get_datalink_channel(
 
     match datalink::channel(interface, config) {
         Ok(Ethernet(_tx, rx)) => Ok(rx),
-        Ok(_) => Err(GetInterfaceErrorKind::OtherError(format!(
+        Ok(_) => Err(GetInterfaceError::OtherError(format!(
             "{}: Unsupported interface type",
             interface.name
         ))),
         Err(e) => match e.kind() {
-            ErrorKind::PermissionDenied => Err(GetInterfaceErrorKind::PermissionError(
+            ErrorKind::PermissionDenied => Err(GetInterfaceError::PermissionError(
                 interface.name.to_owned(),
             )),
-            _ => Err(GetInterfaceErrorKind::OtherError(format!(
-                "{}: {}",
-                &interface.name, e
+            _ => Err(GetInterfaceError::OtherError(format!(
+                "{}: {e}",
+                &interface.name
             ))),
         },
     }
@@ -65,165 +80,140 @@ fn get_interface(interface_name: &str) -> Option<NetworkInterface> {
         .find(|iface| iface.name == interface_name)
 }
 
-fn create_write_to_stdout() -> Box<dyn FnMut(String) + Send> {
+fn create_write_to_stdout() -> Box<dyn FnMut(&str) + Send> {
+    let mut stdout = io::stdout();
     Box::new({
-        let mut stdout = io::stdout();
-        move |output: String| {
-            writeln!(stdout, "{}", output).unwrap();
+        move |output| match writeln!(stdout, "{}", output) {
+            Ok(_) => (),
+            Err(e) if e.kind() == ErrorKind::BrokenPipe => {
+                // A process that was listening to bandwhich stdout has exited
+                // We can't do much here, lets just exit as well
+                std::process::exit(0)
+            }
+            Err(e) => panic!("Failed to write to stdout: {e}"),
         }
     })
 }
 
-#[derive(Debug)]
-pub struct UserErrors {
-    permission: Option<String>,
-    other: Option<String>,
-}
-
-pub fn collect_errors<'a, I>(network_frames: I) -> String
-where
-    I: Iterator<
-        Item = (
-            &'a NetworkInterface,
-            Result<Box<dyn DataLinkReceiver>, GetInterfaceErrorKind>,
-        ),
-    >,
-{
-    let errors = network_frames.fold(
-        UserErrors {
-            permission: None,
-            other: None,
-        },
-        |acc, (_, elem)| {
-            if let Some(iface_error) = elem.err() {
-                match iface_error {
-                    GetInterfaceErrorKind::PermissionError(interface_name) => {
-                        if let Some(prev_interface) = acc.permission {
-                            return UserErrors {
-                                permission: Some(format!("{}, {}", prev_interface, interface_name)),
-                                ..acc
-                            };
-                        } else {
-                            return UserErrors {
-                                permission: Some(interface_name),
-                                ..acc
-                            };
-                        }
-                    }
-                    error => {
-                        if let Some(prev_errors) = acc.other {
-                            return UserErrors {
-                                other: Some(format!("{} \n {}", prev_errors, error)),
-                                ..acc
-                            };
-                        } else {
-                            return UserErrors {
-                                other: Some(format!("{}", error)),
-                                ..acc
-                            };
-                        }
-                    }
-                };
-            }
-            acc
-        },
-    );
-    if let Some(interface_name) = errors.permission {
-        if let Some(other_errors) = errors.other {
-            format!(
-                "\n\n{}: {} \nAdditional Errors: \n {}",
-                interface_name,
-                eperm_message(),
-                other_errors
-            )
-        } else {
-            format!("\n\n{}: {}", interface_name, eperm_message())
-        }
-    } else {
-        let other_errors = errors
-            .other
-            .expect("asked to collect errors but found no errors");
-        format!("\n\n {}", other_errors)
-    }
-}
-
 pub fn get_input(
-    interface_name: &Option<String>,
+    interface_name: Option<&str>,
     resolve: bool,
-    dns_server: &Option<Ipv4Addr>,
-) -> Result<OsInputOutput, failure::Error> {
-    let network_interfaces = if let Some(name) = interface_name {
-        match get_interface(&name) {
-            Some(interface) => vec![interface],
-            None => {
-                failure::bail!("Cannot find interface {}", name);
-                // the homebrew formula relies on this wording, please be careful when changing
-            }
-        }
-    } else {
-        datalink::interfaces()
-    };
+    dns_server: Option<Ipv4Addr>,
+) -> eyre::Result<OsInputOutput> {
+    // get the user's requested interface, if any
+    // IDEA: allow requesting multiple interfaces
+    let requested_interfaces = interface_name
+        .map(|name| get_interface(name).ok_or_else(|| eyre!("Cannot find interface {name}")))
+        .transpose()?
+        .map(|interface| vec![interface]);
 
-    #[cfg(any(target_os = "windows"))]
-    let network_frames = network_interfaces
-        .iter()
-        .filter(|iface| !iface.ips.is_empty())
-        .map(|iface| (iface, get_datalink_channel(iface)));
-    #[cfg(not(target_os = "windows"))]
-    let network_frames = network_interfaces
-        .iter()
-        .filter(|iface| iface.is_up() && !iface.ips.is_empty())
-        .map(|iface| (iface, get_datalink_channel(iface)));
-
-    let (available_network_frames, network_interfaces) = {
-        let network_frames = network_frames.clone();
-        let mut available_network_frames = Vec::new();
-        let mut available_interfaces: Vec<NetworkInterface> = Vec::new();
-        for (iface, rx) in network_frames.filter_map(|(iface, channel)| {
-            if let Ok(rx) = channel {
-                Some((iface, rx))
+    // take the user's requested interfaces (or all interfaces), and filter for up ones
+    let available_interfaces = requested_interfaces
+        .unwrap_or_else(datalink::interfaces)
+        .into_iter()
+        .filter(|interface| {
+            // see https://github.com/libpnet/libpnet/issues/564
+            let keep = if cfg!(target_os = "windows") {
+                !interface.ips.is_empty()
             } else {
-                None
+                interface.is_up() && !interface.ips.is_empty()
+            };
+            if !keep {
+                debug!("{} is down. Skipping it.", interface.name);
             }
-        }) {
-            available_interfaces.push(iface.clone());
-            available_network_frames.push(rx);
-        }
-        (available_network_frames, available_interfaces)
-    };
+            keep
+        })
+        .collect_vec();
 
-    if available_network_frames.is_empty() {
-        let all_errors = collect_errors(network_frames.clone());
-        if !all_errors.is_empty() {
-            failure::bail!(all_errors);
-        }
-
-        failure::bail!("Failed to find any network interface to listen on.");
+    // bail if no interfaces are up
+    if available_interfaces.is_empty() {
+        bail!("Failed to find any network interface to listen on.");
     }
 
-    let keyboard_events = Box::new(TerminalEvents);
-    let write_to_stdout = create_write_to_stdout();
+    // try to get a frame receiver for each interface
+    let interfaces_with_frames_res = available_interfaces
+        .into_iter()
+        .map(|interface| {
+            let frames_res = get_datalink_channel(&interface);
+            (interface, frames_res)
+        })
+        .collect_vec();
+
+    // warn for all frame receivers we failed to acquire
+    interfaces_with_frames_res
+        .iter()
+        .filter_map(|(interface, frames_res)| frames_res.as_ref().err().map(|err| (interface, err)))
+        .for_each(|(interface, err)| {
+            warn!(
+                "Failed to acquire a frame receiver for {}: {err}",
+                interface.name
+            )
+        });
+
+    // bail if all of them fail
+    // note that `Iterator::all` returns `true` for an empty iterator, so it is important to handle
+    // that failure mode separately, which we already have
+    if interfaces_with_frames_res
+        .iter()
+        .all(|(_, frames)| frames.is_err())
+    {
+        let (permission_err_interfaces, other_errs) = interfaces_with_frames_res.iter().fold(
+            (vec![], vec![]),
+            |(mut perms, mut others), (_, res)| {
+                match res {
+                    Ok(_) => (),
+                    Err(GetInterfaceError::PermissionError(interface)) => {
+                        perms.push(interface.as_str())
+                    }
+                    Err(GetInterfaceError::OtherError(err)) => others.push(err.as_str()),
+                }
+                (perms, others)
+            },
+        );
+
+        let err_msg = match (permission_err_interfaces.is_empty(), other_errs.is_empty()) {
+            (false, false) => format!(
+                "\n\n{}: {}\nAdditional errors:\n{}",
+                permission_err_interfaces.join(", "),
+                eperm_message(),
+                other_errs.join("\n")
+            ),
+            (false, true) => format!(
+                "\n\n{}: {}",
+                permission_err_interfaces.join(", "),
+                eperm_message()
+            ),
+            (true, false) => format!("\n\n{}", other_errs.join("\n")),
+            (true, true) => unreachable!("Found no errors in error handling code path."),
+        };
+        bail!(err_msg);
+    }
+
+    // filter out interfaces for which we failed to acquire a frame receiver
+    let interfaces_with_frames = interfaces_with_frames_res
+        .into_iter()
+        .filter_map(|(interface, res)| res.ok().map(|frames| (interface, frames)))
+        .collect();
+
     let dns_client = if resolve {
-        let mut runtime = Runtime::new()?;
-        let resolver =
-            match runtime.block_on(dns::Resolver::new(runtime.handle().clone(), dns_server)) {
-                Ok(resolver) => resolver,
-                Err(err) => failure::bail!(
-                    "Could not initialize the DNS resolver. Are you offline?\n\nReason: {:?}",
-                    err
-                ),
-            };
+        let runtime = Runtime::new()?;
+        let resolver = runtime
+            .block_on(dns::Resolver::new(dns_server))
+            .map_err(|err| {
+                eyre!("Could not initialize the DNS resolver. Are you offline?\n\nReason: {err}")
+            })?;
         let dns_client = dns::Client::new(resolver, runtime)?;
         Some(dns_client)
     } else {
         None
     };
 
+    let write_to_stdout = create_write_to_stdout();
+
     Ok(OsInputOutput {
-        network_interfaces,
-        network_frames: available_network_frames,
+        interfaces_with_frames,
         get_open_sockets,
-        terminal_events: keyboard_events,
+        terminal_events: Box::new(TerminalEvents),
         dns_client,
         write_to_stdout,
     })
@@ -236,7 +226,7 @@ fn eperm_message() -> &'static str {
 }
 
 #[inline]
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "android", target_os = "linux"))]
 fn eperm_message() -> &'static str {
     r#"
     Insufficient permissions to listen on network interface(s). You can work around
@@ -250,7 +240,7 @@ fn eperm_message() -> &'static str {
 }
 
 #[inline]
-#[cfg(any(target_os = "windows"))]
+#[cfg(target_os = "windows")]
 fn eperm_message() -> &'static str {
     "Insufficient permissions to listen on network interface(s). Try running with administrator rights."
 }
